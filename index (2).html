@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>نظام تسجيل الحضور والانصراف والتقرير</title>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; color: #333; }
+        .container { max-width: 1100px; margin: 0 auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.08); }
+        h1, h2 { color: #1F4E78; text-align: center; }
+        .form-group { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 15px; margin-bottom: 20px; background: #eef4f8; padding: 20px; border-radius: 8px; }
+        .field { display: flex; flex-direction: column; }
+        label { font-weight: bold; margin-bottom: 5px; color: #1F4E78; }
+        input, select, button { padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+        button { background-color: #1F4E78; color: white; font-weight: bold; cursor: pointer; border: none; transition: 0.3s; }
+        button:hover { background-color: #153450; }
+        .btn-export { background-color: #27ae60; margin-top: 10px; }
+        .btn-export:hover { background-color: #1e8449; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+        th { background-color: #1F4E78; color: white; }
+        tr:nth-child(even) { background-color: #f9f9f9; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>نظام تسجيل الحضور والانصراف والإنتاجية</h1>
+        
+        <div class="form-group">
+            <div class="field">
+                <label>اسم الموظف:</label>
+                <select id="empSelect">
+                    <option value="795|Ahmed Mokhtar Eid|Development-Digital Justice">Ahmed Mokhtar Eid (795)</option>
+                    <option value="829|Abdulla Khaled Abdulla|Development-Digital Justice">Abdulla Khaled Abdulla (829)</option>
+                    <option value="929|Mohamed Hashem Abdeltawab|Development-Digital Justice">Mohamed Hashem Abdeltawab (929)</option>
+                    <option value="941|Mahmoud Mohamed Rabee Mansour|Development-Digital Justice">Mahmoud Mohamed Rabee Mansour (941)</option>
+                    <option value="1021|Seif Mohamed Zahran|Development-Digital Justice">Seif Mohamed Zahran (1021)</option>
+                    <option value="1025|Ahmed Osama Zaki Elghobary|Development-Digital Justice">Ahmed Osama Zaki Elghobary (1025)</option>
+                    <option value="1066|Mohamed Gamal Mohamed Khalifa|Development-Digital Justice">Mohamed Gamal Mohamed Khalifa (1066)</option>
+                    <option value="1056|Amira Ahmed Hashem Atia|Development-Digital Government">Amira Ahmed Hashem Atia (1056)</option>
+                    <option value="1053|Beshoy Atef Sabaa Farag|Development-Digital Government">Beshoy Atef Sabaa Farag (1053)</option>
+                    <option value="996|Ahmed Sameh Oriba|QC">Ahmed Sameh Oriba (996)</option>
+                    <option value="966|Ahmed Hussein Abdelkhalek Atta|Development-Digital Justice">Ahmed Hussein Abdelkhalek Atta (966)</option>
+                    <option value="1078|Khaled Hossam Eldien Mohamed Husseiny|Development-Digital Justice">Khaled Hossam Eldien Mohamed Husseiny (1078)</option>
+                    <option value="1088|Anas Hazem Mohamed Kamal Nawar|QC">Anas Hazem Mohamed Kamal Nawar (1088)</option>
+                </select>
+            </div>
+            <div class="field">
+                <label>التاريخ:</label>
+                <input type="date" id="attDate">
+            </div>
+            <div class="field">
+                <label>وقت الحضور:</label>
+                <input type="time" id="checkIn" value="09:00">
+            </div>
+            <div class="field">
+                <label>وقت الانصراف:</label>
+                <input type="time" id="checkOut" value="17:00">
+            </div>
+            <div class="field">
+                <label>ملاحظات / نوع الإجازة:</label>
+                <select id="comments">
+                    <option value="">حضور طبيعي</option>
+                    <option value="Annual Leave">Annual Leave (إجازة سنوية)</option>
+                    <option value="Casual Leave">Casual Leave (إجازة عارضة)</option>
+                    <option value="Sick Leave">Sick Leave (إجازة مرضية)</option>
+                    <option value="Attende at Another Project">Attende at Another Project</option>
+                    <option value="Working Days in Weekends (Remotely)">عمل في العطلات (عن بُعد)</option>
+                    <option value="Working Days in Weekends (On Site)">عمل في العطلات (في الموقع)</option>
+                </select>
+            </div>
+        </div>
+        <button onclick="addRecord()">إضافة تسجيل</button>
+        <button class="btn-export" onclick="exportToExcel()">تصدير ملف Excel بنفس التنسيق</button>
+
+        <h2>سجلات الحضور اليومية</h2>
+        <table id="recordsTable">
+            <thead>
+                <tr>
+                    <th>التاريخ</th>
+                    <th>اليوم</th>
+                    <th>اسم الموظف</th>
+                    <th>الحضور</th>
+                    <th>الانصراف</th>
+                    <th>ساعات العمل</th>
+                    <th>الملاحظات</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+    <script>
+        document.getElementById('attDate').valueAsDate = new Date();
+        const records = [];
+
+        function addRecord() {
+            const empVal = document.getElementById('empSelect').value.split('|');
+            const empName = empVal[1];
+            const dateVal = document.getElementById('attDate').value;
+            const inVal = document.getElementById('checkIn').value;
+            const outVal = document.getElementById('checkOut').value;
+            const commentVal = document.getElementById('comments').value;
+
+            if(!dateVal) { alert('يرجى تحديد التاريخ'); return; }
+
+            const d = new Date(dateVal);
+            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const dayName = days[d.getDay()];
+
+            let hrs = "08:00";
+            if(commentVal.includes('Leave')) {
+                hrs = "00:00";
+            } else if(inVal && outVal) {
+                const t1 = new Date(`2000-01-01T${inVal}:00`);
+                const t2 = new Date(`2000-01-01T${outVal}:00`);
+                let diff = (t2 - t1) / (1000 * 60);
+                if(diff < 0) diff += 24 * 60;
+                const h = Math.floor(diff / 60);
+                const m = diff % 60;
+                hrs = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
+            }
+
+            const rec = { Date: dateVal, Day: dayName, Name: empName, CheckIn: inVal, CheckOut: outVal, Hours: hrs, Comments: commentVal };
+            records.push(rec);
+
+            const tbody = document.querySelector('#recordsTable tbody');
+            const row = tbody.insertRow();
+            row.innerHTML = `<td>${rec.Date}</td><td>${rec.Day}</td><td>${rec.Name}</td><td>${rec.CheckIn}</td><td>${rec.CheckOut}</td><td>${rec.Hours}</td><td>${rec.Comments}</td>`;
+        }
+
+        function exportToExcel() {
+            if(records.length === 0) {
+                alert('لا توجد سجلات لتصديرها! قم بإضافة بعض السجلات أولاً.');
+                return;
+            }
+
+            const wb = XLSX.utils.book_new();
+
+            // 1. Attendance Sheet
+            const wsData = [["Date", "Day", "Name", "Check In", "Check Out", "Total Working Hours", "Comments"]];
+            records.forEach(r => {
+                wsData.push([r.Date, r.Day, r.Name, r.CheckIn, r.CheckOut, r.Hours, r.Comments]);
+            });
+            const ws1 = XLSX.utils.aoa_to_sheet(wsData);
+            XLSX.utils.book_append_sheet(wb, ws1, "Support Team Attendance");
+
+            // 2. Summary Sheet
+            const emps = [
+                {id: 795, name: "Ahmed Mokhtar Eid", lob: "Development-Digital Justice "},
+                {id: 829, name: "Abdulla Khaled Abdulla", lob: "Development-Digital Justice "},
+                {id: 929, name: "Mohamed Hashem Abdeltawab", lob: "Development-Digital Justice "},
+                {id: 941, name: "Mahmoud Mohamed Rabee Mansour", lob: "Development-Digital Justice "},
+                {id: 1021, name: "Seif Mohamed Zahran", lob: "Development-Digital Justice "},
+                {id: 1025, name: "Ahmed Osama Zaki Elghobary", lob: "Development-Digital Justice "},
+                {id: 1066, name: "Mohamed Gamal Mohamed Khalifa", lob: "Development-Digital Justice "},
+                {id: 1056, name: "Amira Ahmed Hashem Atia", lob: "Development-Digital Government "},
+                {id: 1053, name: "Beshoy Atef Sabaa Farag", lob: "Development-Digital Government "},
+                {id: 996, name: "Ahmed Sameh Oriba", lob: "QC"},
+                {id: 966, name: "Ahmed Hussein Abdelkhalek Atta ", lob: "Development-Digital Justice "},
+                {id: 1078, name: "Khaled Hossam Eldien Mohamed Husseiny", lob: "Development-Digital Justice "},
+                {id: 1088, name: "Anas Hazem Mohamed Kamal Nawar", lob: "QC"}
+            ];
+
+            const summaryHeaders = [
+                "ID", "Name", "LOB", "Month Days", "Signed In", 
+                "Attende at Another Project", "Vacations \n(Annual/Causal)", 
+                "Sick Leave", "Public Holidays", "Absence/ Not Signed In", 
+                "Actual Working Hours", "Working Days in Weekends (Remotely)", 
+                "Working Days in Weekends (On Site)", "Total Over Time "
+            ];
+            const summaryRows = [summaryHeaders];
+
+            emps.forEach(e => {
+                const empRecs = records.filter(r => r.Name === e.name);
+                const signedIn = empRecs.filter(r => !r.Comments.includes('Leave')).length;
+                const vac = empRecs.filter(r => r.Comments.includes('Annual') || r.Comments.includes('Casual')).length;
+                const sick = empRecs.filter(r => r.Comments.includes('Sick')).length;
+
+                summaryRows.push([
+                    e.id, e.name, e.lob, 21, signedIn, null, vac > 0 ? vac : null, sick > 0 ? sick : null, null, null, "140:00", null, null, null
+                ]);
+            });
+
+            const ws2 = XLSX.utils.aoa_to_sheet(summaryRows);
+            XLSX.utils.book_append_sheet(wb, ws2, "Summary");
+
+            XLSX.writeFile(wb, "Attendance_Report.xlsx");
+        }
+    </script>
+</body>
+</html>
