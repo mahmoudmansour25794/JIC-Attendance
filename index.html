@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
+    
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>نظام تسجيل الحضور والانصراف والتقرير</title>
@@ -22,29 +23,28 @@
         th { background-color: #1F4E78; color: white; }
         tr:nth-child(even) { background-color: #f9f9f9; }
     </style>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.js"></script>
+<style>[hidden]{display:none!important} #status{white-space:pre-wrap;color:#1F4E78;margin:12px 0} button:disabled{opacity:.5;cursor:wait}</style>
 </head>
 <body>
     <div class="container">
+        <div id="loginPanel">
+          <h2>تسجيل الدخول</h2>
+          <form id="loginForm" class="form-group">
+            <div class="field"><label for="email">البريد الإلكتروني</label><input id="email" type="email" autocomplete="username" required></div>
+            <div class="field"><label for="password">كلمة المرور</label><input id="password" type="password" autocomplete="current-password" required></div>
+            <button id="loginButton" type="submit">دخول</button>
+          </form>
+        </div>
+        <div id="sessionPanel" hidden><span id="accountEmail"></span> <button id="logoutButton">تسجيل الخروج</button> <button id="reloadButton">تحديث السجلات</button></div>
+        <p id="status" role="status" aria-live="polite"></p>
+        <div id="appPanel" hidden>
         <h1>نظام تسجيل الحضور والانصراف والإنتاجية</h1>
         
         <div class="form-group">
             <div class="field">
                 <label>اسم الموظف:</label>
-                <select id="empSelect">
-                    <option value="795|Ahmed Mokhtar Eid|Development-Digital Justice">Ahmed Mokhtar Eid (795)</option>
-                    <option value="829|Abdulla Khaled Abdulla|Development-Digital Justice">Abdulla Khaled Abdulla (829)</option>
-                    <option value="929|Mohamed Hashem Abdeltawab|Development-Digital Justice">Mohamed Hashem Abdeltawab (929)</option>
-                    <option value="941|Mahmoud Mohamed Rabee Mansour|Development-Digital Justice">Mahmoud Mohamed Rabee Mansour (941)</option>
-                    <option value="1021|Seif Mohamed Zahran|Development-Digital Justice">Seif Mohamed Zahran (1021)</option>
-                    <option value="1025|Ahmed Osama Zaki Elghobary|Development-Digital Justice">Ahmed Osama Zaki Elghobary (1025)</option>
-                    <option value="1066|Mohamed Gamal Mohamed Khalifa|Development-Digital Justice">Mohamed Gamal Mohamed Khalifa (1066)</option>
-                    <option value="1056|Amira Ahmed Hashem Atia|Development-Digital Government">Amira Ahmed Hashem Atia (1056)</option>
-                    <option value="1053|Beshoy Atef Sabaa Farag|Development-Digital Government">Beshoy Atef Sabaa Farag (1053)</option>
-                    <option value="996|Ahmed Sameh Oriba|QC">Ahmed Sameh Oriba (996)</option>
-                    <option value="966|Ahmed Hussein Abdelkhalek Atta|Development-Digital Justice">Ahmed Hussein Abdelkhalek Atta (966)</option>
-                    <option value="1078|Khaled Hossam Eldien Mohamed Husseiny|Development-Digital Justice">Khaled Hossam Eldien Mohamed Husseiny (1078)</option>
-                    <option value="1088|Anas Hazem Mohamed Kamal Nawar|QC">Anas Hazem Mohamed Kamal Nawar (1088)</option>
-                </select>
+                <select id="empSelect"></select>
             </div>
             <div class="field">
                 <label>التاريخ:</label>
@@ -71,7 +71,7 @@
                 </select>
             </div>
         </div>
-        <button onclick="addRecord()">إضافة تسجيل</button>
+        <button id="addButton" onclick="addRecord()">إضافة تسجيل</button>
         <button class="btn-export" onclick="exportToExcel()">تصدير ملف Excel بنفس التنسيق</button>
 
         <h2>سجلات الحضور اليومية</h2>
@@ -90,14 +90,100 @@
             <tbody></tbody>
         </table>
     </div>
+    </div>
 
     <script>
         document.getElementById('attDate').valueAsDate = new Date();
-        const records = [];
+        let records = [];
+        let employees = [];
+        let currentUser = null;
+        let accessVersion = 0;
+        let busy = false;
+        let pendingRecord = null;
+        const db = window.supabase.createClient('https://tsevfdrzoocllaojvgmr.supabase.co', 'sb_publishable_uR0JQkg8skRiUk95xQRpDA_s8gepEG5');
+        const el = id => document.getElementById(id);
+        function status(message) { el('status').textContent = message; }
+        function renderRecords() {
+          const body = document.querySelector('#recordsTable tbody');
+          body.replaceChildren();
+          records.forEach(r => {
+            const row = body.insertRow();
+            [r.Date,r.Day,r.Name,r.CheckIn,r.CheckOut,r.Hours,r.Comments].forEach(v => { row.insertCell().textContent = v ?? ''; });
+          });
+        }
+        function mapRecord(r) {
+          const employee = employees.find(e => e.id === r.employee_id);
+          return {Id:r.id, EmployeeId:r.employee_id, Date:r.attendance_date,
+            Day:['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date(r.attendance_date+'T12:00:00').getDay()],
+            Name:employee?.name ?? String(r.employee_id), CheckIn:r.check_in?.slice(0,5) ?? '', CheckOut:r.check_out?.slice(0,5) ?? '', Hours:r.hours, Comments:r.comments};
+        }
+        async function loadData(version) {
+          const {data:people,error:peopleError} = await db.from('employees').select('id,name,lob,display_order').order('display_order');
+          if(peopleError) throw peopleError;
+          const rows=[];
+          for(let start=0;;start+=1000) {
+            const {data,error} = await db.from('attendance_records').select('*').order('created_at').order('id').range(start,start+999);
+            if(error) throw error;
+            rows.push(...data);
+            if(data.length<1000) break;
+          }
+          if(version !== accessVersion) return;
+          employees=people;
+          const select=el('empSelect'); const previous=select.value; select.replaceChildren();
+          employees.forEach(e=> { const option=document.createElement('option'); option.value=String(e.id); option.textContent=`${e.name} (${e.id})`; select.append(option); });
+          if(employees.some(e=>String(e.id)===previous)) select.value=previous;
+          records=rows.map(mapRecord); renderRecords();
+        }
+        async function showSession(session) {
+          const version=++accessVersion;
+          currentUser=session?.user ?? null;
+          pendingRecord=null; records=[]; employees=[]; renderRecords();
+          el('empSelect').replaceChildren(); el('appPanel').hidden=true;
+          el('loginPanel').hidden=!!currentUser; el('sessionPanel').hidden=!currentUser;
+          if(!currentUser) {status('سجّل الدخول لعرض سجلات الحضور.'); return;}
+          el('accountEmail').textContent=currentUser.email;
+          status('جارٍ تحميل البيانات...');
+          try {
+            const {data,error}=await db.from('app_users').select('user_id').eq('user_id',currentUser.id).maybeSingle();
+            if(error) throw error;
+            if(version !== accessVersion) return;
+            if(!data) {status('هذا الحساب لم يتم تفعيل صلاحية الحضور له. تواصل مع مسؤول المشروع.'); return;}
+            await loadData(version);
+            if(version !== accessVersion) return;
+            el('appPanel').hidden=false;
+            status(`تم تحميل ${records.length} سجل حضور.`);
+          } catch(error) {if(version===accessVersion) status('تعذر تحميل البيانات: '+error.message);}
+        }
+        el('loginForm').addEventListener('submit',async event=>{
+          event.preventDefault(); el('loginButton').disabled=true; status('جارٍ تسجيل الدخول...');
+          try {
+            const {data,error}=await db.auth.signInWithPassword({email:el('email').value.trim(),password:el('password').value});
+            if(error) throw error;
+            el('password').value=''; await showSession(data.session);
+          } catch(error) {status('تعذر تسجيل الدخول: '+error.message);}
+          finally {el('loginButton').disabled=false;}
+        });
+        el('logoutButton').addEventListener('click',async()=>{
+          const {error}=await db.auth.signOut({scope:'local'});
+          if(error) {status('تعذر تسجيل الخروج: '+error.message); return;}
+          await showSession(null);
+        });
+        el('reloadButton').addEventListener('click',async()=>{
+          if(busy) return;
+          const {data,error}=await db.auth.getSession();
+          if(error) {status(error.message);return;}
+          await showSession(data.session);
+        });
+        db.auth.onAuthStateChange((event,session)=>{
+          if(event==='SIGNED_OUT') void showSession(null);
+        });
+        db.auth.getSession().then(({data,error})=>error?status(error.message):showSession(data.session));
 
-        function addRecord() {
-            const empVal = document.getElementById('empSelect').value.split('|');
-            const empName = empVal[1];
+        async function addRecord() {
+            if(busy || !currentUser || el('appPanel').hidden) return;
+            const employee = employees.find(e => String(e.id) === el('empSelect').value);
+            if(!employee) {status('اختر الموظف أولاً.');return;}
+            const empName = employee.name;
             const dateVal = document.getElementById('attDate').value;
             const inVal = document.getElementById('checkIn').value;
             const outVal = document.getElementById('checkOut').value;
@@ -122,12 +208,26 @@
                 hrs = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
             }
 
-            const rec = { Date: dateVal, Day: dayName, Name: empName, CheckIn: inVal, CheckOut: outVal, Hours: hrs, Comments: commentVal };
-            records.push(rec);
+            const payload={employee_id:employee.id,attendance_date:dateVal,check_in:inVal||null,check_out:outVal||null,hours:hrs,comments:commentVal,created_by:currentUser.id};
+            const signature=JSON.stringify(payload);
+            if(!pendingRecord || pendingRecord.signature!==signature) pendingRecord={signature,id:crypto.randomUUID()};
+            const id=pendingRecord.id;
+            const version=accessVersion;
+            busy=true; el('addButton').disabled=true;
+            status('جارٍ حفظ التسجيل...');
+            try {
+              let {data,error}=await db.from('attendance_records').insert({id,...payload}).select().single();
+              if(error?.code==='23505') {
+                const retry=await db.from('attendance_records').select('*').eq('id',id).single();
+                data=retry.data; error=retry.error;
+              }
+              if(error) throw error;
+              if(version!==accessVersion) return;
+              if(!records.some(r=>r.Id===data.id)) records.push(mapRecord(data));
+              pendingRecord=null; renderRecords(); status('تم حفظ التسجيل في Supabase.');
+            } catch(error) {if(version===accessVersion) status('تعذر تأكيد الحفظ. يمكنك إعادة المحاولة: '+error.message);}
+            finally {busy=false;el('addButton').disabled=false;}
 
-            const tbody = document.querySelector('#recordsTable tbody');
-            const row = tbody.insertRow();
-            row.innerHTML = `<td>${rec.Date}</td><td>${rec.Day}</td><td>${rec.Name}</td><td>${rec.CheckIn}</td><td>${rec.CheckOut}</td><td>${rec.Hours}</td><td>${rec.Comments}</td>`;
         }
 
         function exportToExcel() {
@@ -147,21 +247,7 @@
             XLSX.utils.book_append_sheet(wb, ws1, "Support Team Attendance");
 
             // 2. Summary Sheet
-            const emps = [
-                {id: 795, name: "Ahmed Mokhtar Eid", lob: "Development-Digital Justice "},
-                {id: 829, name: "Abdulla Khaled Abdulla", lob: "Development-Digital Justice "},
-                {id: 929, name: "Mohamed Hashem Abdeltawab", lob: "Development-Digital Justice "},
-                {id: 941, name: "Mahmoud Mohamed Rabee Mansour", lob: "Development-Digital Justice "},
-                {id: 1021, name: "Seif Mohamed Zahran", lob: "Development-Digital Justice "},
-                {id: 1025, name: "Ahmed Osama Zaki Elghobary", lob: "Development-Digital Justice "},
-                {id: 1066, name: "Mohamed Gamal Mohamed Khalifa", lob: "Development-Digital Justice "},
-                {id: 1056, name: "Amira Ahmed Hashem Atia", lob: "Development-Digital Government "},
-                {id: 1053, name: "Beshoy Atef Sabaa Farag", lob: "Development-Digital Government "},
-                {id: 996, name: "Ahmed Sameh Oriba", lob: "QC"},
-                {id: 966, name: "Ahmed Hussein Abdelkhalek Atta ", lob: "Development-Digital Justice "},
-                {id: 1078, name: "Khaled Hossam Eldien Mohamed Husseiny", lob: "Development-Digital Justice "},
-                {id: 1088, name: "Anas Hazem Mohamed Kamal Nawar", lob: "QC"}
-            ];
+            const emps = employees;
 
             const summaryHeaders = [
                 "ID", "Name", "LOB", "Month Days", "Signed In", 
@@ -173,7 +259,7 @@
             const summaryRows = [summaryHeaders];
 
             emps.forEach(e => {
-                const empRecs = records.filter(r => r.Name === e.name);
+                const empRecs = records.filter(r => r.EmployeeId === e.id);
                 const signedIn = empRecs.filter(r => !r.Comments.includes('Leave')).length;
                 const vac = empRecs.filter(r => r.Comments.includes('Annual') || r.Comments.includes('Casual')).length;
                 const sick = empRecs.filter(r => r.Comments.includes('Sick')).length;
