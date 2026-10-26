@@ -71,6 +71,8 @@
                 </select>
             </div>
         </div>
+        <p id="editNotice" role="status" hidden></p>
+        <button id="cancelEditButton" onclick="cancelEdit()" hidden>إلغاء التعديل</button>
         <button id="addButton" onclick="addRecord()">إضافة تسجيل</button>
         <button class="btn-export" onclick="exportToExcel()">تصدير ملف Excel بنفس التنسيق</button>
 
@@ -85,6 +87,7 @@
                     <th>الانصراف</th>
                     <th>ساعات العمل</th>
                     <th>الملاحظات</th>
+                    <th>الإجراءات</th>
                 </tr>
             </thead>
             <tbody></tbody>
@@ -100,6 +103,8 @@
         let accessVersion = 0;
         let busy = false;
         let pendingRecord = null;
+        let editingId = null;
+        let originalForm = null;
         const db = window.supabase.createClient('https://tsevfdrzoocllaojvgmr.supabase.co', 'sb_publishable_uR0JQkg8skRiUk95xQRpDA_s8gepEG5');
         const el = id => document.getElementById(id);
         function status(message) { el('status').textContent = message; }
@@ -109,7 +114,64 @@
           records.forEach(r => {
             const row = body.insertRow();
             [r.Date,r.Day,r.Name,r.CheckIn,r.CheckOut,r.Hours,r.Comments].forEach(v => { row.insertCell().textContent = v ?? ''; });
+            const actions = row.insertCell();
+            const edit = document.createElement('button');
+            edit.textContent='تعديل'; edit.type='button'; edit.disabled=busy;
+            edit.setAttribute('aria-label',`تعديل سجل ${r.Name} بتاريخ ${r.Date}`);
+            edit.addEventListener('click',()=>startEdit(r.Id));
+            const remove = document.createElement('button');
+            remove.textContent='حذف'; remove.type='button'; remove.disabled=busy;
+            remove.style.backgroundColor='#b42318'; remove.style.marginInlineStart='6px';
+            remove.setAttribute('aria-label',`حذف سجل ${r.Name} بتاريخ ${r.Date}`);
+            remove.addEventListener('click',()=>deleteRecord(r.Id));
+            actions.append(edit,remove);
           });
+        }
+        function setBusy(value) {
+          busy=value;
+          ['addButton','cancelEditButton','reloadButton','checkIn','checkOut','comments'].forEach(id=>el(id).disabled=value);
+          el('empSelect').disabled=value || !!editingId;
+          el('attDate').disabled=value || !!editingId;
+          renderRecords();
+        }
+        function startEdit(id) {
+          if(busy || !currentUser || el('appPanel').hidden) return;
+          const rec=records.find(r=>r.Id===id); if(!rec) return;
+          if(!editingId) originalForm=Object.fromEntries(['empSelect','attDate','checkIn','checkOut','comments'].map(id=>[id,el(id).value]));
+          editingId=id; pendingRecord=null;
+          el('empSelect').value=String(rec.EmployeeId); el('attDate').value=rec.Date;
+          el('checkIn').value=rec.CheckIn; el('checkOut').value=rec.CheckOut; el('comments').value=rec.Comments;
+          el('empSelect').disabled=true; el('attDate').disabled=true;
+          el('addButton').textContent='حفظ التعديل';
+          el('cancelEditButton').hidden=false; el('editNotice').hidden=false;
+          el('editNotice').textContent=`تعديل سجل ${rec.Name} — ${rec.Date}`;
+          el('editNotice').scrollIntoView({behavior:'smooth',block:'center'}); el('checkIn').focus();
+          status('عدّل وقت الحضور أو الانصراف أو الملاحظات، ثم اضغط حفظ التعديل.');
+        }
+        function cancelEdit(force=false) {
+          if(busy && !force) return;
+          editingId=null;
+          if(originalForm) Object.entries(originalForm).forEach(([id,value])=>el(id).value=value);
+          originalForm=null;
+          el('empSelect').disabled=busy; el('attDate').disabled=busy;
+          el('addButton').textContent='إضافة تسجيل';
+          el('cancelEditButton').hidden=true; el('editNotice').hidden=true;
+          if(!force) status('تم إلغاء التعديل دون حفظ.');
+        }
+        async function deleteRecord(id) {
+          if(busy || !currentUser || el('appPanel').hidden) return;
+          const rec=records.find(r=>r.Id===id); if(!rec) return;
+          if(!confirm(`هل تريد حذف سجل ${rec.Name} بتاريخ ${rec.Date}؟ لا يمكن التراجع عن الحذف.`)) return;
+          const version=accessVersion; setBusy(true); status('جارٍ حذف السجل...');
+          try {
+            const {data,error}=await db.from('attendance_records').delete().eq('id',id).select('id').single();
+            if(error) throw error;
+            if(version!==accessVersion) return;
+            records=records.filter(r=>r.Id!==data.id);
+            if(editingId===id) cancelEdit(true);
+            status('تم حذف السجل من Supabase.');
+          } catch(error) {if(version===accessVersion) status('تعذر تأكيد الحذف. حدّث السجلات قبل إعادة المحاولة: '+error.message);}
+          finally {setBusy(false);}
         }
         function mapRecord(r) {
           const employee = employees.find(e => e.id === r.employee_id);
@@ -136,6 +198,7 @@
         }
         async function showSession(session) {
           const version=++accessVersion;
+          cancelEdit(true);
           currentUser=session?.user ?? null;
           pendingRecord=null; records=[]; employees=[]; renderRecords();
           el('empSelect').replaceChildren(); el('appPanel').hidden=true;
@@ -209,24 +272,31 @@
             }
 
             const payload={employee_id:employee.id,attendance_date:dateVal,check_in:inVal||null,check_out:outVal||null,hours:hrs,comments:commentVal,created_by:currentUser.id};
+            const editId=editingId;
             const signature=JSON.stringify(payload);
-            if(!pendingRecord || pendingRecord.signature!==signature) pendingRecord={signature,id:crypto.randomUUID()};
-            const id=pendingRecord.id;
+            if(!editId && (!pendingRecord || pendingRecord.signature!==signature)) pendingRecord={signature,id:crypto.randomUUID()};
+            const id=editId ?? pendingRecord.id;
             const version=accessVersion;
-            busy=true; el('addButton').disabled=true;
-            status('جارٍ حفظ التسجيل...');
+            setBusy(true);
+            status(editId ? 'جارٍ حفظ التعديل...' : 'جارٍ حفظ التسجيل...');
             try {
-              let {data,error}=await db.from('attendance_records').insert({id,...payload}).select().single();
-              if(error?.code==='23505') {
-                const retry=await db.from('attendance_records').select('*').eq('id',id).single();
-                data=retry.data; error=retry.error;
+              let result;
+              if(editId) {
+                result=await db.from('attendance_records').update({check_in:payload.check_in,check_out:payload.check_out,hours:payload.hours,comments:payload.comments}).eq('id',editId).select().single();
+              } else {
+                result=await db.from('attendance_records').insert({id,...payload}).select().single();
+                if(result.error?.code==='23505') result=await db.from('attendance_records').select('*').eq('id',id).single();
               }
+              const {data,error}=result;
               if(error) throw error;
               if(version!==accessVersion) return;
-              if(!records.some(r=>r.Id===data.id)) records.push(mapRecord(data));
-              pendingRecord=null; renderRecords(); status('تم حفظ التسجيل في Supabase.');
-            } catch(error) {if(version===accessVersion) status('تعذر تأكيد الحفظ. يمكنك إعادة المحاولة: '+error.message);}
-            finally {busy=false;el('addButton').disabled=false;}
+              if(editId) records=records.map(r=>r.Id===editId ? mapRecord(data) : r);
+              else if(!records.some(r=>r.Id===data.id)) records.push(mapRecord(data));
+              pendingRecord=null;
+              if(editId) cancelEdit(true);
+              status(editId ? 'تم حفظ التعديل في Supabase.' : 'تم حفظ التسجيل في Supabase.');
+            } catch(error) {if(version===accessVersion) status('تعذر تأكيد الحفظ. يمكنك إعادة المحاولة أو تحديث السجلات: '+error.message);}
+            finally {setBusy(false);}
 
         }
 
