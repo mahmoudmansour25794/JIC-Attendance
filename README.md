@@ -12,11 +12,14 @@ The login function performs authentication itself, so `verify_jwt = false` is in
 
 ## Date filtering and Excel
 
-- Initial range: today in `Africa/Cairo`.
+- The homepage opens on today in `Africa/Cairo`, displaying one day at a time. The left arrow selects the nearest previous saved date and the right arrow the nearest next saved date. Empty dates are skipped without downloading historical attendance rows.
 - From/To are inclusive. Empty To means today; equal dates select one day.
 - Press **عرض الفترة** to apply changed dates. Export stays disabled while dates differ from the applied period.
-- Date buttons show only dates with records in the applied period, plus **الكل**.
-- Selecting a date affects the table only. Excel detail and summary always use the entire applied period, sorted by date ascending.
+- Applying a range displays its first populated day. Arrows stay within the applied period and skip empty dates; there is no whole-period table view. Navigation disables at either end.
+- Without an applied range, Excel detail and summary export the currently displayed home day only. With a range applied, they export the entire period in ascending date order, regardless of the day displayed.
+- The **اليوم** button returns to today and home browsing. Refresh preserves the current browsing mode and displayed day.
+- If today is empty, it remains the initial displayed date with an empty-state message; arrows can still reach saved dates. Empty filtered periods disable both arrows.
+- Leaving an unsaved record edit via the arrows requires confirmation.
 - The existing summary constants (21 days and 140 hours) are unchanged.
 - All pages of the API response are retrieved, including periods exceeding 1,000 records.
 - Inserting a record outside the viewed period saves it but does not add it to that period's table/export.
@@ -29,7 +32,7 @@ The login function performs authentication itself, so `verify_jwt = false` is in
 
 ## Validation
 
-Run `npm test` using Node 20 or newer. Tests use the actual inline application script and the actual Edge Function handler, with mocked DOM/API boundaries. They cover date range boundaries, Cairo midnight, day navigation, whole-period export, API batching, updates/deletes, and username authentication failure/success paths.
+Run `npm test` using Node 20 or newer. Tests use the actual inline application script and the actual Edge Function handler, with mocked DOM/API boundaries. They cover date range boundaries, Cairo midnight, home and range arrow navigation, empty days and navigation boundaries, home-day versus whole-period export, API batching, updates/deletes, failed fetches, unsaved edits, and username authentication failure/success paths.
 
 The live project was also checked for username assignments, denied invalid credentials, RLS grants, and rate-limit behavior. A real successful sign-in with an existing user's password must be tested by that user; no existing password was requested or changed. A full browser visual test was unavailable in the build environment.
 

@@ -26,9 +26,9 @@
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.js"></script>
 <style>[hidden]{display:none!important} #status{white-space:pre-wrap;color:#1F4E78;margin:12px 0} button:disabled{opacity:.5;cursor:wait}</style>
 <style>
-#datePages {display:flex; flex-wrap:wrap; gap:8px; margin:14px 0}
-#datePages button {background:#eef4f8; color:#1F4E78; border:1px solid #b7cddd}
-#datePages button[aria-pressed="true"] {background:#1F4E78; color:white}
+#datePages {display:flex; direction:ltr; align-items:center; justify-content:center; gap:12px; margin:14px 0}
+#datePages button {background:#eef4f8; color:#1F4E78; border:1px solid #b7cddd; min-width:76px}
+#displayedDate {direction:rtl; text-align:center; min-width:150px; font-weight:600}
 #filterHint {color:#8a5200} #rangeSummary {font-weight:600} small {margin-top:6px; color:#666}
 </style>
 </head>
@@ -91,7 +91,11 @@
         </form>
         <p id="rangeSummary" aria-live="polite"></p>
         <p id="filterHint" hidden>تم تغيير التواريخ. اضغط «عرض الفترة» لتحديث النتائج والتصدير.</p>
-        <nav id="datePages" aria-label="اختيار يوم الحضور"></nav>
+        <nav id="datePages" aria-label="التنقل بين أيام الحضور">
+          <button id="previousDayButton" type="button" aria-label="اليوم السابق" disabled>← السابق</button>
+          <span id="displayedDate" aria-live="polite"></span>
+          <button id="nextDayButton" type="button" aria-label="اليوم التالي" disabled>التالي →</button>
+        </nav>
         <p id="emptyRecords" hidden>لا توجد سجلات حضور في الفترة المختارة.</p>
         <div style="overflow-x:auto">
         <table id="recordsTable">
@@ -124,7 +128,10 @@
         document.getElementById('fromDate').value = todayDate();
         document.getElementById('toDate').value = todayDate();
         let activeRange = {from:todayDate(), to:todayDate()};
-        let selectedDay = null;
+        let selectedDay = todayDate();
+        let browseMode = 'home';
+        let previousDay = null;
+        let nextDay = null;
         let rangeLoaded = false;
         let records = [];
         let employees = [];
@@ -148,28 +155,35 @@
         function updateFilterHint() {
           el('filterHint').hidden=!filterDirty();
           el('exportButton').disabled=busy || !rangeLoaded || filterDirty();
+          el('previousDayButton').disabled=busy || !rangeLoaded || filterDirty() || !previousDay;
+          el('nextDayButton').disabled=busy || !rangeLoaded || filterDirty() || !nextDay;
         }
+        function datesInRange() { return [...new Set(records.map(r=>r.Date))].sort(); }
         function renderDatePages() {
-          const dates=[...new Set(records.map(r=>r.Date))].sort();
-          if(selectedDay && !dates.includes(selectedDay)) selectedDay=null;
-          const nav=el('datePages'); nav.replaceChildren(); nav.hidden=dates.length===0;
-          for(const date of [null,...dates]) {
-            const button=document.createElement('button'); button.type='button';
-            button.textContent=date ? new Intl.DateTimeFormat('ar-EG',{day:'numeric',month:'long',year:'numeric'}).format(new Date(date+'T12:00:00')) : 'الكل';
-            button.dataset.date=date || 'all';
-            button.setAttribute('aria-pressed',String(date===selectedDay)); button.disabled=busy;
-            button.addEventListener('click',()=>{if(!busy){selectedDay=date;renderRecords();}});
-            nav.append(button);
+          if(browseMode==='range') {
+            const dates=datesInRange();
+            if(!dates.includes(selectedDay)) selectedDay=dates.find(d=>!selectedDay || d>selectedDay) || dates.at(-1) || null;
+            const index=dates.indexOf(selectedDay);
+            previousDay=index>0 ? dates[index-1] : null;
+            nextDay=index>=0 && index<dates.length-1 ? dates[index+1] : null;
           }
-          el('rangeSummary').textContent=rangeLoaded ? `الفترة: ${activeRange.from} إلى ${activeRange.to} — ${records.length} سجل. تصدير Excel يشمل الفترة كاملة.` : '';
-          el('emptyRecords').hidden=!rangeLoaded || records.length!==0;
+          el('datePages').hidden=!rangeLoaded;
+          el('displayedDate').textContent=selectedDay ? new Intl.DateTimeFormat('ar-EG',{day:'numeric',month:'long',year:'numeric'}).format(new Date(selectedDay+'T12:00:00')) : 'لا توجد أيام بها سجلات';
+          el('previousDayButton').disabled=busy || !rangeLoaded || !previousDay;
+          el('nextDayButton').disabled=busy || !rangeLoaded || !nextDay;
+          const visibleCount=records.filter(r=>r.Date===selectedDay).length;
+          el('rangeSummary').textContent=!rangeLoaded ? '' : browseMode==='range'
+            ? `الفترة: ${activeRange.from} إلى ${activeRange.to} — اليوم المعروض: ${visibleCount} سجل. تصدير Excel يشمل الفترة كاملة (${records.length} سجل).`
+            : `اليوم المعروض: ${selectedDay} — ${visibleCount} سجل. تصدير Excel يشمل هذا اليوم فقط.`;
+          el('emptyRecords').hidden=!rangeLoaded || visibleCount!==0;
+          el('emptyRecords').textContent=browseMode==='range' && !records.length ? 'لا توجد سجلات حضور في الفترة المختارة.' : 'لا توجد سجلات حضور في اليوم المعروض.';
           updateFilterHint();
         }
         function renderRecords() {
           renderDatePages();
           const body = document.querySelector('#recordsTable tbody');
           body.replaceChildren();
-          sortedRecords().filter(r=>!selectedDay || r.Date===selectedDay).forEach(r => {
+          sortedRecords().filter(r=>r.Date===selectedDay).forEach(r => {
             const row = body.insertRow();
             [r.Date,r.Day,r.Name,r.CheckIn,r.CheckOut,r.Hours,r.Comments].forEach(v => { row.insertCell().textContent = v ?? ''; });
             const actions = row.insertCell();
@@ -227,6 +241,12 @@
             if(version!==accessVersion) return;
             records=records.filter(r=>r.Id!==data.id);
             if(editingId===id) cancelEdit(true);
+            if(browseMode==='home') {
+              previousDay=null;nextDay=null;
+              try {await loadData(version,activeRange,'home',selectedDay);}
+              catch {if(version===accessVersion)status('تم حذف السجل، لكن تعذر تحديث التنقل. اضغط تحديث السجلات.');return;}
+              if(version!==accessVersion)return;
+            }
             status('تم حذف السجل من Supabase.');
           } catch(error) {if(version===accessVersion) status('تعذر تأكيد الحذف. حدّث السجلات قبل إعادة المحاولة: '+error.message);}
           finally {setBusy(false);}
@@ -237,7 +257,7 @@
             Day:['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date(r.attendance_date+'T12:00:00').getDay()],
             Name:employee?.name ?? String(r.employee_id), CheckIn:r.check_in?.slice(0,5) ?? '', CheckOut:r.check_out?.slice(0,5) ?? '', Hours:r.hours, Comments:r.comments};
         }
-        async function loadData(version, range = activeRange) {
+        async function loadData(version, range = activeRange, mode = browseMode, day = selectedDay) {
           const {data:people,error:peopleError} = await db.from('employees').select('id,name,lob,display_order').order('display_order');
           if(peopleError) throw peopleError;
           const rows=[];
@@ -247,18 +267,31 @@
             rows.push(...data);
             if(data.length<1000) break;
           }
+          let previousDate=null, nextDate=null;
+          if(mode==='home') {
+            const results=await Promise.all([
+              db.from('attendance_records').select('attendance_date').lt('attendance_date',day).order('attendance_date',{ascending:false}).limit(1),
+              db.from('attendance_records').select('attendance_date').gt('attendance_date',day).order('attendance_date',{ascending:true}).limit(1)
+            ]);
+            for(const result of results) if(result.error) throw result.error;
+            previousDate=results[0].data[0]?.attendance_date || null;
+            nextDate=results[1].data[0]?.attendance_date || null;
+          }
           if(version !== accessVersion) return;
           employees=people;
           const select=el('empSelect'); const previous=select.value; select.replaceChildren();
           employees.forEach(e=> { const option=document.createElement('option'); option.value=String(e.id); option.textContent=`${e.name} (${e.id})`; select.append(option); });
           if(employees.some(e=>String(e.id)===previous)) select.value=previous;
-          records=rows.map(mapRecord); activeRange={...range}; rangeLoaded=true; renderRecords();
+          records=rows.map(mapRecord); activeRange={...range}; browseMode=mode;
+          selectedDay=day; previousDay=previousDate; nextDay=nextDate;
+          if(mode==='home') {el('fromDate').value=range.from;el('toDate').value=range.to;}
+          rangeLoaded=true; renderRecords();
         }
         async function showSession(session) {
           const version=++accessVersion;
           cancelEdit(true);
           currentUser=session?.user ?? null;
-          pendingRecord=null; records=[]; employees=[]; rangeLoaded=false; selectedDay=null; renderRecords();
+          pendingRecord=null; records=[]; employees=[]; rangeLoaded=false; selectedDay=todayDate(); previousDay=null; nextDay=null; browseMode='home'; activeRange={from:selectedDay,to:selectedDay}; el('fromDate').value=selectedDay; el('toDate').value=selectedDay; renderRecords();
           el('empSelect').replaceChildren(); el('appPanel').hidden=true;
           el('loginPanel').hidden=!!currentUser; el('sessionPanel').hidden=!currentUser;
           if(!currentUser) {status('سجّل الدخول لعرض سجلات الحضور.'); return;}
@@ -313,19 +346,49 @@
           cancelEdit(true);
           const version=accessVersion; setBusy(true); status('جارٍ تحميل الفترة المختارة...');
           try {
-            await loadData(version,range);
+            await loadData(version,range,'range',null);
             if(version!==accessVersion) return;
-            selectedDay=null; renderRecords(); status(`تم تحميل ${records.length} سجل حضور.`);
+            renderRecords(); status(`تم تحميل ${records.length} سجل حضور. يتم عرض يوم واحد في كل مرة.`);
           } catch(error) {if(version===accessVersion)status('تعذر تحميل الفترة. النتائج السابقة لم تتغير: '+error.message);}
           finally {setBusy(false);}
         }
         el('filterForm').addEventListener('submit',event=>{event.preventDefault();void applyDateFilter();});
         ['fromDate','toDate'].forEach(id=>el(id).addEventListener('input',updateFilterHint));
-        el('todayButton').addEventListener('click',()=>{
-          if(busy)return;
-          el('fromDate').value=todayDate();el('toDate').value=todayDate();updateFilterHint();void applyDateFilter();
+        async function openHomeDay(day) {
+          if(busy || !currentUser || el('appPanel').hidden) return;
+          if(editingId && !confirm('يوجد تعديل لم يُحفظ. هل تريد إلغاءه والانتقال ليوم آخر؟')) return;
+          cancelEdit(true);
+          const version=accessVersion;setBusy(true);status('جارٍ تحميل اليوم...');
+          try {
+            await loadData(version,{from:day,to:day},'home',day);
+            if(version===accessVersion) status(`تم تحميل سجلات يوم ${day}.`);
+          } catch(error) {if(version===accessVersion) status('تعذر تحميل اليوم. النتائج السابقة لم تتغير: '+error.message);}
+          finally {setBusy(false);}
+        }
+        async function navigateDay(direction) {
+          if(busy || !rangeLoaded || !currentUser || el('appPanel').hidden || filterDirty()) return;
+          const day=direction<0 ? previousDay : nextDay;
+          if(!day)return;
+          if(browseMode==='home') return openHomeDay(day);
+          if(editingId && !confirm('يوجد تعديل لم يُحفظ. هل تريد إلغاءه والانتقال ليوم آخر؟')) return;
+          cancelEdit(true);selectedDay=day;renderRecords();
+        }
+        el('previousDayButton').addEventListener('click',()=>void navigateDay(-1));
+        el('nextDayButton').addEventListener('click',()=>void navigateDay(1));
+        el('todayButton').addEventListener('click',()=>void openHomeDay(todayDate()));
+        el('reloadButton').addEventListener('click',()=>{
+          if(browseMode==='home') void openHomeDay(selectedDay);
+          else void refreshRange();
         });
-        el('reloadButton').addEventListener('click',()=>void applyDateFilter());
+        async function refreshRange() {
+          if(busy || !currentUser || el('appPanel').hidden)return;
+          if(editingId && !confirm('يوجد تعديل لم يُحفظ. هل تريد إلغاءه وتحديث السجلات؟')) return;
+          cancelEdit(true);
+          const version=accessVersion;setBusy(true);
+          try {await loadData(version,activeRange,'range',selectedDay);}
+          catch(error){if(version===accessVersion)status('تعذر تحديث السجلات: '+error.message);}
+          finally {setBusy(false);}
+        }
         db.auth.onAuthStateChange((event,session)=>{
           if(event==='SIGNED_OUT') void showSession(null);
         });
@@ -383,6 +446,12 @@
               else if(data.attendance_date>=activeRange.from && data.attendance_date<=activeRange.to && !records.some(r=>r.Id===data.id)) records.push(mapRecord(data));
               pendingRecord=null;
               if(editId) cancelEdit(true);
+              if(!editId && browseMode==='home') {
+                previousDay=null;nextDay=null;
+                try {await loadData(version,activeRange,'home',selectedDay);}
+                catch {if(version===accessVersion)status('تم حفظ التسجيل، لكن تعذر تحديث التنقل. اضغط تحديث السجلات.');return;}
+                if(version!==accessVersion)return;
+              }
               status(editId ? 'تم حفظ التعديل في Supabase.' : (data.attendance_date<activeRange.from || data.attendance_date>activeRange.to ? 'تم حفظ التسجيل. تاريخه خارج الفترة المعروضة؛ غيّر الفلتر لعرضه.' : 'تم حفظ التسجيل في Supabase.'));
             } catch(error) {if(version===accessVersion) status('تعذر تأكيد الحفظ. يمكنك إعادة المحاولة أو تحديث السجلات: '+error.message);}
             finally {setBusy(false);}
@@ -392,7 +461,7 @@
         function exportToExcel() {
             if(busy || !rangeLoaded || !currentUser || el('appPanel').hidden) return;
             if(filterDirty()) {status('اضغط عرض الفترة أولاً لتطبيق التواريخ الجديدة.');return;}
-            const exportRecords=sortedRecords(); // Entire applied range, never just the selected day.
+            const exportRecords=sortedRecords().filter(r=>browseMode==='range' || r.Date===selectedDay); // A filtered period exports in full; home exports the displayed day.
             if(exportRecords.length === 0) {
                 alert('لا توجد سجلات في الفترة المختارة لتصديرها.');
                 return;

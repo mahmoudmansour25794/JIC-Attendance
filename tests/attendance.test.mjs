@@ -22,8 +22,8 @@ async function app(initialRows,loggedIn=true){
  let rows=structuredClone(initialRows),exports=[],queries=[],fail=false,confirmed=true,loginBody;
  const session={user:{id:'u1',email:'private@example.invalid'}};
  const db={auth:{onAuthStateChange(){},async getSession(){return {data:{session:loggedIn?session:null},error:null}},async setSession(tokens){assert.equal(tokens.access_token,'access');return {data:{session},error:null}},async signOut(){return {error:null}}},from(table){
-  let from,to,id,operation='select',payload;
-  const q={select(){return q},gte(k,v){from=v;return q},lte(k,v){to=v;return q},order(){return q},eq(k,v){id=v;return q},insert(p){operation='insert';payload=p;return q},update(p){operation='update';payload=p;return q},delete(){operation='delete';return q},
+  let from,to,id,less,greater,ascending=true,operation='select',payload;
+  const q={select(){return q},gte(k,v){from=v;return q},lte(k,v){to=v;return q},lt(k,v){less=v;return q},gt(k,v){greater=v;return q},order(k,options){if(options)ascending=options.ascending;return q},async limit(n){if(fail)return {error:{message:'offline'}};return {data:rows.filter(r=>(!less||r.attendance_date<less)&&(!greater||r.attendance_date>greater)).sort((a,b)=>(ascending?1:-1)*a.attendance_date.localeCompare(b.attendance_date)).slice(0,n),error:null}},eq(k,v){id=v;return q},insert(p){operation='insert';payload=p;return q},update(p){operation='update';payload=p;return q},delete(){operation='delete';return q},
    async maybeSingle(){return {data:{user_id:'u1',username:'hashem'},error:null}},
    async range(start,end){queries.push({from,to,start,end});if(fail)return {error:{message:'offline'}};return {data:rows.filter(r=>r.attendance_date>=from&&r.attendance_date<=to).sort((a,b)=>a.attendance_date.localeCompare(b.attendance_date)||a.id.localeCompare(b.id)).slice(start,end+1),error:null}},
    then(resolve,reject){return Promise.resolve({data:[{id:795,name:'Ahmed',lob:'Justice'}],error:null}).then(resolve,reject)},
@@ -40,15 +40,19 @@ const sample=()=>[record('2026-10-09','r9'),record('2026-10-05','r5'),record('20
 test('opens on Cairo today, loads only today and shows current username',async()=>{
  const a=await app(sample());assert.equal(a.el('fromDate').value,'2026-10-28');assert.equal(a.el('toDate').value,'2026-10-28');assert.equal(a.el('appPanel').hidden,false);assert.equal(a.el('accountUsername').textContent,'hashem');assert.equal(a.el('tbody').children.length,1);assert.equal(a.queries[0].from,'2026-10-28');assert.equal(a.run("todayDate(new Date('2026-10-27T22:30:00Z'))"),'2026-10-28');
 });
-test('inclusive range, only populated date tabs, single-day view exports whole sorted range',async()=>{
- const a=await app(sample());await a.filter('2026-10-05','2026-10-09');assert.deepEqual(a.el('datePages').children.map(b=>b.dataset.date),['all','2026-10-05','2026-10-07','2026-10-09']);
- a.el('datePages').children[2].events.click();assert.equal(a.el('tbody').children.length,1);assert.equal(a.el('tbody').children[0].children[0].textContent,'2026-10-07');a.run('exportToExcel()');
- const exported=a.exports[0];assert.deepEqual(Array.from(exported.wb['Support Team Attendance'].slice(1),r=>r[0]),['2026-10-05','2026-10-07','2026-10-09']);assert.equal(exported.wb.Summary[1][4],2);assert.equal(exported.wb.Summary[1][7],1);assert.equal(exported.wb.Summary[1][3],21);assert.equal(exported.wb.Summary[1][10],'140:00');assert.equal(exported.name,'Attendance_Report_2026-10-05_to_2026-10-09.xlsx');
+test('range starts at first populated day, arrows skip gaps and export the entire sorted period',async()=>{
+ const a=await app(sample());await a.filter('2026-10-05','2026-10-09');
+ assert.equal(a.run('selectedDay'),'2026-10-05');assert.equal(a.el('tbody').children.length,1);assert.equal(a.el('previousDayButton').disabled,true);assert.equal(a.el('nextDayButton').disabled,false);
+ await a.run('navigateDay(1)');assert.equal(a.run('selectedDay'),'2026-10-07');assert.equal(a.el('tbody').children.length,1);assert.equal(a.el('tbody').children[0].children[0].textContent,'2026-10-07');
+ a.run('exportToExcel()');const exported=a.exports[0];
+ assert.deepEqual(Array.from(exported.wb['Support Team Attendance'].slice(1),r=>r[0]),['2026-10-05','2026-10-07','2026-10-09']);assert.equal(exported.wb.Summary[1][4],2);assert.equal(exported.wb.Summary[1][7],1);assert.equal(exported.wb.Summary[1][3],21);assert.equal(exported.wb.Summary[1][10],'140:00');assert.equal(exported.name,'Attendance_Report_2026-10-05_to_2026-10-09.xlsx');
+ await a.run('navigateDay(1)');assert.equal(a.run('selectedDay'),'2026-10-09');assert.equal(a.el('nextDayButton').disabled,true);await a.run('navigateDay(1)');assert.equal(a.run('selectedDay'),'2026-10-09');
+ await a.run('navigateDay(-1)');assert.equal(a.run('selectedDay'),'2026-10-07');
 });
 test('blank To uses today; equal dates select one day; empty days omitted',async()=>{
- const a=await app(sample());await a.filter('2026-10-09','');assert.equal(a.run('activeRange.to'),'2026-10-28');assert.equal(a.el('tbody').children.length,3);
+ const a=await app(sample());await a.filter('2026-10-09','');assert.equal(a.run('activeRange.to'),'2026-10-28');assert.equal(a.el('tbody').children.length,1);assert.equal(a.run('records.length'),3);
  await a.filter('2026-10-07','2026-10-07');assert.equal(a.el('tbody').children.length,1);
- await a.filter('2026-10-06','2026-10-06');assert.equal(a.el('datePages').hidden,true);assert.equal(a.el('emptyRecords').hidden,false);a.run('exportToExcel()');assert.equal(a.exports.length,0);
+ await a.filter('2026-10-06','2026-10-06');assert.equal(a.el('previousDayButton').disabled,true);assert.equal(a.el('nextDayButton').disabled,true);assert.equal(a.el('emptyRecords').hidden,false);a.run('exportToExcel()');assert.equal(a.exports.length,0);
 });
 test('invalid/reversed ranges do not fetch; dirty filters cannot export stale data',async()=>{
  const a=await app(sample());const count=a.queries.length;await a.filter('2026-10-09','2026-10-05');assert.equal(a.queries.length,count);a.run('exportToExcel()');assert.equal(a.exports.length,0);
@@ -60,8 +64,10 @@ test('all API batches are fetched and exported beyond 1000 rows',async()=>{
 test('failed filter preserves prior results and prevents mismatched export',async()=>{
  const a=await app(sample());a.fail(true);await a.filter('2026-10-05','2026-10-09');assert.equal(a.run('activeRange.from'),'2026-10-28');assert.equal(a.el('tbody').children.length,1);assert.equal(a.el('exportButton').disabled,true);
 });
-test('delete last record of selected day removes its date tab; cancel prevents deletion',async()=>{
- const a=await app(sample());await a.filter('2026-10-05','2026-10-09');a.el('datePages').children[2].events.click();a.confirm(false);await a.run("deleteRecord('r7')");assert.equal(a.rows().length,6);a.confirm(true);await a.run("deleteRecord('r7')");assert.equal(a.run('selectedDay'),null);assert.deepEqual(a.el('datePages').children.map(b=>b.dataset.date),['all','2026-10-05','2026-10-09']);
+test('delete last record of displayed day advances to next remaining day; cancellation preserves it',async()=>{
+ const a=await app(sample());await a.filter('2026-10-05','2026-10-09');await a.run('navigateDay(1)');
+ a.confirm(false);await a.run("deleteRecord('r7')");assert.equal(a.rows().length,6);a.confirm(true);await a.run("deleteRecord('r7')");
+ assert.equal(a.run('selectedDay'),'2026-10-09');assert.equal(a.el('tbody').children.length,1);assert.equal(a.el('nextDayButton').disabled,true);await a.run('navigateDay(-1)');assert.equal(a.run('selectedDay'),'2026-10-05');
 });
 test('edit recalculates hours and export sees updated row',async()=>{
  const a=await app(sample());a.run("startEdit('today')");a.el('checkIn').value='10:00';a.el('checkOut').value='17:00';a.el('empSelect').value='795';await a.run('addRecord()');assert.equal(a.rows().find(r=>r.id==='today').hours,'07:00');a.run('exportToExcel()');assert.equal(a.exports[0].wb['Support Team Attendance'][1][5],'07:00');
@@ -71,4 +77,29 @@ test('inserting outside the period saves but does not contaminate displayed/expo
 });
 test('username login uses endpoint then adopts Supabase session',async()=>{
  const a=await app(sample(),false);a.el('username').value=' Hashem ';a.el('password').value='unchanged password';await a.el('loginForm').events.submit({preventDefault(){}});assert.equal(a.login().username,'hashem');assert.equal(a.login().password,'unchanged password');assert.equal(a.el('password').value,'');assert.equal(a.el('appPanel').hidden,false);
+});
+
+test('homepage arrows browse nearest saved dates and export only the displayed day',async()=>{
+ const a=await app(sample());assert.equal(a.run('selectedDay'),'2026-10-28');assert.equal(a.el('nextDayButton').disabled,true);
+ await a.run('navigateDay(-1)');assert.equal(a.run('selectedDay'),'2026-10-10');assert.equal(a.el('tbody').children.length,1);assert.equal(a.el('fromDate').value,'2026-10-10');
+ a.run('exportToExcel()');assert.deepEqual(Array.from(a.exports[0].wb['Support Team Attendance'].slice(1),r=>r[0]),['2026-10-10']);assert.equal(a.exports[0].name,'Attendance_Report_2026-10-10_to_2026-10-10.xlsx');
+ await a.run('navigateDay(1)');assert.equal(a.run('selectedDay'),'2026-10-28');
+});
+test('empty today remains visible initially and arrows can reach nearest saved date',async()=>{
+ const a=await app([record('2026-10-05','past'),record('2026-10-30','future')]);
+ assert.equal(a.run('selectedDay'),'2026-10-28');assert.equal(a.el('emptyRecords').hidden,false);assert.equal(a.el('previousDayButton').disabled,false);assert.equal(a.el('nextDayButton').disabled,false);
+ await a.run('navigateDay(-1)');assert.equal(a.run('selectedDay'),'2026-10-05');assert.equal(a.el('previousDayButton').disabled,true);await a.run('navigateDay(1)');assert.equal(a.run('selectedDay'),'2026-10-30');
+});
+test('no records disable both arrows on homepage and in filtered range',async()=>{
+ const a=await app([]);assert.equal(a.el('previousDayButton').disabled,true);assert.equal(a.el('nextDayButton').disabled,true);assert.equal(a.el('emptyRecords').hidden,false);
+ await a.filter('2026-10-01','2026-10-31');assert.equal(a.run('selectedDay'),null);assert.equal(a.el('previousDayButton').disabled,true);assert.equal(a.el('nextDayButton').disabled,true);
+});
+test('navigation confirms unsaved edits, blocks dirty filters and preserves prior day on fetch failure',async()=>{
+ const a=await app(sample());a.run("startEdit('today')");a.confirm(false);await a.run('navigateDay(-1)');assert.equal(a.run('selectedDay'),'2026-10-28');assert.equal(a.run('editingId'),'today');
+ a.confirm(true);await a.run('navigateDay(-1)');assert.equal(a.run('editingId'),null);assert.equal(a.run('selectedDay'),'2026-10-10');
+ a.fail(true);await a.run('navigateDay(-1)');assert.equal(a.run('selectedDay'),'2026-10-10');assert.equal(a.el('tbody').children[0].children[0].textContent,'2026-10-10');a.fail(false);
+ a.el('fromDate').value='2026-10-01';a.run('updateFilterHint()');assert.equal(a.el('previousDayButton').disabled,true);await a.run('navigateDay(-1)');assert.equal(a.run('selectedDay'),'2026-10-10');
+});
+test('Today restores home browsing and single-day export after a range',async()=>{
+ const a=await app(sample());await a.filter('2026-10-05','2026-10-09');await a.run('openHomeDay(todayDate())');assert.equal(a.run('browseMode'),'home');assert.equal(a.run('selectedDay'),'2026-10-28');a.run('exportToExcel()');assert.equal(a.exports[0].wb['Support Team Attendance'].length,2);
 });
