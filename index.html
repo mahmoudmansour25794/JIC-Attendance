@@ -25,18 +25,24 @@
     </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.4/dist/umd/supabase.js"></script>
 <style>[hidden]{display:none!important} #status{white-space:pre-wrap;color:#1F4E78;margin:12px 0} button:disabled{opacity:.5;cursor:wait}</style>
+<style>
+#datePages {display:flex; flex-wrap:wrap; gap:8px; margin:14px 0}
+#datePages button {background:#eef4f8; color:#1F4E78; border:1px solid #b7cddd}
+#datePages button[aria-pressed="true"] {background:#1F4E78; color:white}
+#filterHint {color:#8a5200} #rangeSummary {font-weight:600} small {margin-top:6px; color:#666}
+</style>
 </head>
 <body>
     <div class="container">
         <div id="loginPanel">
           <h2>تسجيل الدخول</h2>
           <form id="loginForm" class="form-group">
-            <div class="field"><label for="email">البريد الإلكتروني</label><input id="email" type="email" autocomplete="username" required></div>
+            <div class="field"><label for="username">اسم المستخدم</label><input id="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" dir="ltr" required></div>
             <div class="field"><label for="password">كلمة المرور</label><input id="password" type="password" autocomplete="current-password" required></div>
             <button id="loginButton" type="submit">دخول</button>
           </form>
         </div>
-        <div id="sessionPanel" hidden><span id="accountEmail"></span> <button id="logoutButton">تسجيل الخروج</button> <button id="reloadButton">تحديث السجلات</button></div>
+        <div id="sessionPanel" hidden><span id="accountUsername"></span> <button id="logoutButton">تسجيل الخروج</button> <button id="reloadButton">تحديث السجلات</button></div>
         <p id="status" role="status" aria-live="polite"></p>
         <div id="appPanel" hidden>
         <h1>نظام تسجيل الحضور والانصراف والإنتاجية</h1>
@@ -74,9 +80,20 @@
         <p id="editNotice" role="status" hidden></p>
         <button id="cancelEditButton" onclick="cancelEdit()" hidden>إلغاء التعديل</button>
         <button id="addButton" onclick="addRecord()">إضافة تسجيل</button>
-        <button class="btn-export" onclick="exportToExcel()">تصدير ملف Excel بنفس التنسيق</button>
+        <button id="exportButton" class="btn-export" onclick="exportToExcel()">تصدير ملف Excel بنفس التنسيق</button>
 
         <h2>سجلات الحضور اليومية</h2>
+        <form id="filterForm" class="form-group">
+          <div class="field"><label for="fromDate">من تاريخ (From date)</label><input type="date" id="fromDate" required></div>
+          <div class="field"><label for="toDate">إلى تاريخ (To date)</label><input type="date" id="toDate"><small>لو تركته فارغًا، تُعرض السجلات حتى اليوم.</small></div>
+          <button id="filterButton" type="submit">عرض الفترة</button>
+          <button id="todayButton" type="button">اليوم</button>
+        </form>
+        <p id="rangeSummary" aria-live="polite"></p>
+        <p id="filterHint" hidden>تم تغيير التواريخ. اضغط «عرض الفترة» لتحديث النتائج والتصدير.</p>
+        <nav id="datePages" aria-label="اختيار يوم الحضور"></nav>
+        <p id="emptyRecords" hidden>لا توجد سجلات حضور في الفترة المختارة.</p>
+        <div style="overflow-x:auto">
         <table id="recordsTable">
             <thead>
                 <tr>
@@ -92,11 +109,23 @@
             </thead>
             <tbody></tbody>
         </table>
+        </div>
     </div>
     </div>
 
     <script>
-        document.getElementById('attDate').valueAsDate = new Date();
+        // Calendar dates follow the team's timezone, including around UTC midnight.
+        function todayDate(now = new Date()) {
+          const parts = new Intl.DateTimeFormat('en-CA', {timeZone:'Africa/Cairo', year:'numeric', month:'2-digit', day:'2-digit'}).formatToParts(now);
+          const part = type => parts.find(p=>p.type===type).value;
+          return `${part('year')}-${part('month')}-${part('day')}`;
+        }
+        document.getElementById('attDate').value = todayDate();
+        document.getElementById('fromDate').value = todayDate();
+        document.getElementById('toDate').value = todayDate();
+        let activeRange = {from:todayDate(), to:todayDate()};
+        let selectedDay = null;
+        let rangeLoaded = false;
         let records = [];
         let employees = [];
         let currentUser = null;
@@ -105,13 +134,42 @@
         let pendingRecord = null;
         let editingId = null;
         let originalForm = null;
-        const db = window.supabase.createClient('https://tsevfdrzoocllaojvgmr.supabase.co', 'sb_publishable_uR0JQkg8skRiUk95xQRpDA_s8gepEG5');
+        const SUPABASE_URL = 'https://tsevfdrzoocllaojvgmr.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_uR0JQkg8skRiUk95xQRpDA_s8gepEG5';
+        const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
         const el = id => document.getElementById(id);
         function status(message) { el('status').textContent = message; }
+        function sortedRecords() {
+          return records.slice().sort((a,b)=>a.Date.localeCompare(b.Date) || (a.CreatedAt||'').localeCompare(b.CreatedAt||'') || a.Id.localeCompare(b.Id));
+        }
+        function filterDirty() {
+          return el('fromDate').value !== activeRange.from || (el('toDate').value || todayDate()) !== activeRange.to;
+        }
+        function updateFilterHint() {
+          el('filterHint').hidden=!filterDirty();
+          el('exportButton').disabled=busy || !rangeLoaded || filterDirty();
+        }
+        function renderDatePages() {
+          const dates=[...new Set(records.map(r=>r.Date))].sort();
+          if(selectedDay && !dates.includes(selectedDay)) selectedDay=null;
+          const nav=el('datePages'); nav.replaceChildren(); nav.hidden=dates.length===0;
+          for(const date of [null,...dates]) {
+            const button=document.createElement('button'); button.type='button';
+            button.textContent=date ? new Intl.DateTimeFormat('ar-EG',{day:'numeric',month:'long',year:'numeric'}).format(new Date(date+'T12:00:00')) : 'الكل';
+            button.dataset.date=date || 'all';
+            button.setAttribute('aria-pressed',String(date===selectedDay)); button.disabled=busy;
+            button.addEventListener('click',()=>{if(!busy){selectedDay=date;renderRecords();}});
+            nav.append(button);
+          }
+          el('rangeSummary').textContent=rangeLoaded ? `الفترة: ${activeRange.from} إلى ${activeRange.to} — ${records.length} سجل. تصدير Excel يشمل الفترة كاملة.` : '';
+          el('emptyRecords').hidden=!rangeLoaded || records.length!==0;
+          updateFilterHint();
+        }
         function renderRecords() {
+          renderDatePages();
           const body = document.querySelector('#recordsTable tbody');
           body.replaceChildren();
-          records.forEach(r => {
+          sortedRecords().filter(r=>!selectedDay || r.Date===selectedDay).forEach(r => {
             const row = body.insertRow();
             [r.Date,r.Day,r.Name,r.CheckIn,r.CheckOut,r.Hours,r.Comments].forEach(v => { row.insertCell().textContent = v ?? ''; });
             const actions = row.insertCell();
@@ -129,7 +187,7 @@
         }
         function setBusy(value) {
           busy=value;
-          ['addButton','cancelEditButton','reloadButton','checkIn','checkOut','comments'].forEach(id=>el(id).disabled=value);
+          ['addButton','cancelEditButton','reloadButton','checkIn','checkOut','comments','fromDate','toDate','filterButton','todayButton'].forEach(id=>el(id).disabled=value);
           el('empSelect').disabled=value || !!editingId;
           el('attDate').disabled=value || !!editingId;
           renderRecords();
@@ -175,16 +233,16 @@
         }
         function mapRecord(r) {
           const employee = employees.find(e => e.id === r.employee_id);
-          return {Id:r.id, EmployeeId:r.employee_id, Date:r.attendance_date,
+          return {Id:r.id, CreatedAt:r.created_at, EmployeeId:r.employee_id, Date:r.attendance_date,
             Day:['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date(r.attendance_date+'T12:00:00').getDay()],
             Name:employee?.name ?? String(r.employee_id), CheckIn:r.check_in?.slice(0,5) ?? '', CheckOut:r.check_out?.slice(0,5) ?? '', Hours:r.hours, Comments:r.comments};
         }
-        async function loadData(version) {
+        async function loadData(version, range = activeRange) {
           const {data:people,error:peopleError} = await db.from('employees').select('id,name,lob,display_order').order('display_order');
           if(peopleError) throw peopleError;
           const rows=[];
           for(let start=0;;start+=1000) {
-            const {data,error} = await db.from('attendance_records').select('*').order('created_at').order('id').range(start,start+999);
+            const {data,error} = await db.from('attendance_records').select('*').gte('attendance_date',range.from).lte('attendance_date',range.to).order('attendance_date').order('created_at').order('id').range(start,start+999);
             if(error) throw error;
             rows.push(...data);
             if(data.length<1000) break;
@@ -194,23 +252,24 @@
           const select=el('empSelect'); const previous=select.value; select.replaceChildren();
           employees.forEach(e=> { const option=document.createElement('option'); option.value=String(e.id); option.textContent=`${e.name} (${e.id})`; select.append(option); });
           if(employees.some(e=>String(e.id)===previous)) select.value=previous;
-          records=rows.map(mapRecord); renderRecords();
+          records=rows.map(mapRecord); activeRange={...range}; rangeLoaded=true; renderRecords();
         }
         async function showSession(session) {
           const version=++accessVersion;
           cancelEdit(true);
           currentUser=session?.user ?? null;
-          pendingRecord=null; records=[]; employees=[]; renderRecords();
+          pendingRecord=null; records=[]; employees=[]; rangeLoaded=false; selectedDay=null; renderRecords();
           el('empSelect').replaceChildren(); el('appPanel').hidden=true;
           el('loginPanel').hidden=!!currentUser; el('sessionPanel').hidden=!currentUser;
           if(!currentUser) {status('سجّل الدخول لعرض سجلات الحضور.'); return;}
-          el('accountEmail').textContent=currentUser.email;
+          el('accountUsername').textContent='';
           status('جارٍ تحميل البيانات...');
           try {
-            const {data,error}=await db.from('app_users').select('user_id').eq('user_id',currentUser.id).maybeSingle();
+            const {data,error}=await db.from('app_users').select('user_id,username').eq('user_id',currentUser.id).maybeSingle();
             if(error) throw error;
             if(version !== accessVersion) return;
             if(!data) {status('هذا الحساب لم يتم تفعيل صلاحية الحضور له. تواصل مع مسؤول المشروع.'); return;}
+            el('accountUsername').textContent=data.username || 'مستخدم';
             await loadData(version);
             if(version !== accessVersion) return;
             el('appPanel').hidden=false;
@@ -220,8 +279,16 @@
         el('loginForm').addEventListener('submit',async event=>{
           event.preventDefault(); el('loginButton').disabled=true; status('جارٍ تسجيل الدخول...');
           try {
-            const {data,error}=await db.auth.signInWithPassword({email:el('email').value.trim(),password:el('password').value});
+            const response=await fetch(SUPABASE_URL+'/functions/v1/username-login', {
+              method:'POST', headers:{'Content-Type':'application/json','apikey':SUPABASE_KEY},
+              body:JSON.stringify({username:el('username').value.trim().toLowerCase(),password:el('password').value})
+            });
+            const tokens=await response.json();
+            if(!response.ok) throw new Error(tokens.error || 'تعذر تسجيل الدخول.');
+            const {data,error}=await db.auth.setSession({access_token:tokens.access_token,refresh_token:tokens.refresh_token});
             if(error) throw error;
+            activeRange={from:todayDate(),to:todayDate()};
+            el('fromDate').value=activeRange.from; el('toDate').value=activeRange.to;
             el('password').value=''; await showSession(data.session);
           } catch(error) {status('تعذر تسجيل الدخول: '+error.message);}
           finally {el('loginButton').disabled=false;}
@@ -231,12 +298,34 @@
           if(error) {status('تعذر تسجيل الخروج: '+error.message); return;}
           await showSession(null);
         });
-        el('reloadButton').addEventListener('click',async()=>{
-          if(busy) return;
-          const {data,error}=await db.auth.getSession();
-          if(error) {status(error.message);return;}
-          await showSession(data.session);
+        function chosenRange() {
+          const range={from:el('fromDate').value,to:el('toDate').value || todayDate()};
+          const valid = date => /^\d{4}-\d{2}-\d{2}$/.test(date) && !isNaN(new Date(date+'T12:00:00').getTime()) && new Date(date+'T12:00:00Z').toISOString().slice(0,10)===date;
+          if(!valid(range.from) || !valid(range.to)) throw new Error('اختر تاريخ بداية ونهاية صحيحين.');
+          if(range.from>range.to) throw new Error('تاريخ البداية يجب أن يكون قبل تاريخ النهاية أو مساويًا له.');
+          return range;
+        }
+        async function applyDateFilter() {
+          if(busy || !currentUser || el('appPanel').hidden) return;
+          let range;
+          try {range=chosenRange();} catch(error){status(error.message);return;}
+          if(editingId && !confirm('يوجد تعديل لم يُحفظ. هل تريد إلغاءه وتغيير الفترة؟')) return;
+          cancelEdit(true);
+          const version=accessVersion; setBusy(true); status('جارٍ تحميل الفترة المختارة...');
+          try {
+            await loadData(version,range);
+            if(version!==accessVersion) return;
+            selectedDay=null; renderRecords(); status(`تم تحميل ${records.length} سجل حضور.`);
+          } catch(error) {if(version===accessVersion)status('تعذر تحميل الفترة. النتائج السابقة لم تتغير: '+error.message);}
+          finally {setBusy(false);}
+        }
+        el('filterForm').addEventListener('submit',event=>{event.preventDefault();void applyDateFilter();});
+        ['fromDate','toDate'].forEach(id=>el(id).addEventListener('input',updateFilterHint));
+        el('todayButton').addEventListener('click',()=>{
+          if(busy)return;
+          el('fromDate').value=todayDate();el('toDate').value=todayDate();updateFilterHint();void applyDateFilter();
         });
+        el('reloadButton').addEventListener('click',()=>void applyDateFilter());
         db.auth.onAuthStateChange((event,session)=>{
           if(event==='SIGNED_OUT') void showSession(null);
         });
@@ -291,18 +380,21 @@
               if(error) throw error;
               if(version!==accessVersion) return;
               if(editId) records=records.map(r=>r.Id===editId ? mapRecord(data) : r);
-              else if(!records.some(r=>r.Id===data.id)) records.push(mapRecord(data));
+              else if(data.attendance_date>=activeRange.from && data.attendance_date<=activeRange.to && !records.some(r=>r.Id===data.id)) records.push(mapRecord(data));
               pendingRecord=null;
               if(editId) cancelEdit(true);
-              status(editId ? 'تم حفظ التعديل في Supabase.' : 'تم حفظ التسجيل في Supabase.');
+              status(editId ? 'تم حفظ التعديل في Supabase.' : (data.attendance_date<activeRange.from || data.attendance_date>activeRange.to ? 'تم حفظ التسجيل. تاريخه خارج الفترة المعروضة؛ غيّر الفلتر لعرضه.' : 'تم حفظ التسجيل في Supabase.'));
             } catch(error) {if(version===accessVersion) status('تعذر تأكيد الحفظ. يمكنك إعادة المحاولة أو تحديث السجلات: '+error.message);}
             finally {setBusy(false);}
 
         }
 
         function exportToExcel() {
-            if(records.length === 0) {
-                alert('لا توجد سجلات لتصديرها! قم بإضافة بعض السجلات أولاً.');
+            if(busy || !rangeLoaded || !currentUser || el('appPanel').hidden) return;
+            if(filterDirty()) {status('اضغط عرض الفترة أولاً لتطبيق التواريخ الجديدة.');return;}
+            const exportRecords=sortedRecords(); // Entire applied range, never just the selected day.
+            if(exportRecords.length === 0) {
+                alert('لا توجد سجلات في الفترة المختارة لتصديرها.');
                 return;
             }
 
@@ -310,7 +402,7 @@
 
             // 1. Attendance Sheet
             const wsData = [["Date", "Day", "Name", "Check In", "Check Out", "Total Working Hours", "Comments"]];
-            records.forEach(r => {
+            exportRecords.forEach(r => {
                 wsData.push([r.Date, r.Day, r.Name, r.CheckIn, r.CheckOut, r.Hours, r.Comments]);
             });
             const ws1 = XLSX.utils.aoa_to_sheet(wsData);
@@ -329,7 +421,7 @@
             const summaryRows = [summaryHeaders];
 
             emps.forEach(e => {
-                const empRecs = records.filter(r => r.EmployeeId === e.id);
+                const empRecs = exportRecords.filter(r => r.EmployeeId === e.id);
                 const signedIn = empRecs.filter(r => !r.Comments.includes('Leave')).length;
                 const vac = empRecs.filter(r => r.Comments.includes('Annual') || r.Comments.includes('Casual')).length;
                 const sick = empRecs.filter(r => r.Comments.includes('Sick')).length;
@@ -342,7 +434,7 @@
             const ws2 = XLSX.utils.aoa_to_sheet(summaryRows);
             XLSX.utils.book_append_sheet(wb, ws2, "Summary");
 
-            XLSX.writeFile(wb, "Attendance_Report.xlsx");
+            XLSX.writeFile(wb, `Attendance_Report_${activeRange.from}_to_${activeRange.to}.xlsx`);
         }
     </script>
 </body>

@@ -1,0 +1,3 @@
+# This login endpoint validates username/password itself, before a JWT exists.
+[functions.username-login]
+verify_jwt = false
