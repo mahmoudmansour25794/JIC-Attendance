@@ -20,7 +20,10 @@ The login function performs authentication itself, so `verify_jwt = false` is in
 - The **اليوم** button returns to today and home browsing. Refresh preserves the current browsing mode and displayed day.
 - If today is empty, it remains the initial displayed date with an empty-state message; arrows can still reach saved dates. Empty filtered periods disable both arrows.
 - Leaving an unsaved record edit via the arrows requires confirmation.
-- The existing summary constants (21 days and 140 hours) are unchanged.
+- The summary's 21-day field remains unchanged. Actual Working Hours is now an Excel formula instead of a fixed 140 hours.
+- Every exported detail row calculates duration from Check In and Check Out only. Comments do not add, deduct or zero hours. Missing times produce zero, and departures after midnight wrap into the next day.
+- Both row durations and employee totals are numeric Excel times formatted as `[h]:mm`, so totals can exceed 24 hours. Changing exported attendance times updates the formulas in Excel; it does not update Supabase.
+- Summary formulas group by a hidden Employee ID column, keeping employees with the same name separate. The formulas reference only the exported rows and preserve the current single-day/whole-period export behavior.
 - All pages of the API response are retrieved, including periods exceeding 1,000 records.
 - Inserting a record outside the viewed period saves it but does not add it to that period's table/export.
 

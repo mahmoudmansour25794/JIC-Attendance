@@ -45,7 +45,7 @@ test('range starts at first populated day, arrows skip gaps and export the entir
  assert.equal(a.run('selectedDay'),'2026-10-05');assert.equal(a.el('tbody').children.length,1);assert.equal(a.el('previousDayButton').disabled,true);assert.equal(a.el('nextDayButton').disabled,false);
  await a.run('navigateDay(1)');assert.equal(a.run('selectedDay'),'2026-10-07');assert.equal(a.el('tbody').children.length,1);assert.equal(a.el('tbody').children[0].children[0].textContent,'2026-10-07');
  a.run('exportToExcel()');const exported=a.exports[0];
- assert.deepEqual(Array.from(exported.wb['Support Team Attendance'].slice(1),r=>r[0]),['2026-10-05','2026-10-07','2026-10-09']);assert.equal(exported.wb.Summary[1][4],2);assert.equal(exported.wb.Summary[1][7],1);assert.equal(exported.wb.Summary[1][3],21);assert.equal(exported.wb.Summary[1][10],'140:00');assert.equal(exported.name,'Attendance_Report_2026-10-05_to_2026-10-09.xlsx');
+ assert.deepEqual(Array.from(exported.wb['Support Team Attendance'].slice(1),r=>r[0]),['2026-10-05','2026-10-07','2026-10-09']);assert.equal(exported.wb.Summary[1][4],2);assert.equal(exported.wb.Summary[1][7],1);assert.equal(exported.wb.Summary[1][3],21);assert.equal(exported.wb.Summary[1][10].v,1);assert.equal(exported.wb.Summary[1][10].z,'[h]:mm');assert.equal(exported.name,'Attendance_Report_2026-10-05_to_2026-10-09.xlsx');
  await a.run('navigateDay(1)');assert.equal(a.run('selectedDay'),'2026-10-09');assert.equal(a.el('nextDayButton').disabled,true);await a.run('navigateDay(1)');assert.equal(a.run('selectedDay'),'2026-10-09');
  await a.run('navigateDay(-1)');assert.equal(a.run('selectedDay'),'2026-10-07');
 });
@@ -70,7 +70,7 @@ test('delete last record of displayed day advances to next remaining day; cancel
  assert.equal(a.run('selectedDay'),'2026-10-09');assert.equal(a.el('tbody').children.length,1);assert.equal(a.el('nextDayButton').disabled,true);await a.run('navigateDay(-1)');assert.equal(a.run('selectedDay'),'2026-10-05');
 });
 test('edit recalculates hours and export sees updated row',async()=>{
- const a=await app(sample());a.run("startEdit('today')");a.el('checkIn').value='10:00';a.el('checkOut').value='17:00';a.el('empSelect').value='795';await a.run('addRecord()');assert.equal(a.rows().find(r=>r.id==='today').hours,'07:00');a.run('exportToExcel()');assert.equal(a.exports[0].wb['Support Team Attendance'][1][5],'07:00');
+ const a=await app(sample());a.run("startEdit('today')");a.el('checkIn').value='10:00';a.el('checkOut').value='17:00';a.el('empSelect').value='795';await a.run('addRecord()');assert.equal(a.rows().find(r=>r.id==='today').hours,'07:00');a.run('exportToExcel()');assert.equal(a.exports[0].wb['Support Team Attendance'][1][5].v,7/24);assert.equal(a.exports[0].wb['Support Team Attendance'][1][5].f,'IF(OR(D2="",E2=""),0,MOD(E2-D2,1))');
 });
 test('inserting outside the period saves but does not contaminate displayed/exported range',async()=>{
  const a=await app(sample());a.el('empSelect').value='795';a.el('attDate').value='2026-10-01';a.el('checkIn').value='09:00';a.el('checkOut').value='17:00';await a.run('addRecord()');assert.equal(a.rows().length,7);assert.equal(a.el('tbody').children.length,1);a.run('exportToExcel()');assert.equal(a.exports[0].wb['Support Team Attendance'].length,2);
@@ -126,4 +126,24 @@ test('different employees can have attendance on the same day',async()=>{
 });
 test('retry after lost insert response recovers the saved UUID without duplication',async()=>{
  const a=await app([]);enterAttendance(a);a.loseInsertResponse();await a.run('addRecord()');assert.equal(a.rows().length,1);const savedId=a.rows()[0].id;assert.match(a.el('status').textContent,/تعذر تأكيد الحفظ/);await a.run('addRecord()');assert.equal(a.rows().length,1);assert.equal(a.rows()[0].id,savedId);assert.equal(a.run('records.length'),1);assert.match(a.el('status').textContent,/تم حفظ التسجيل/);
+});
+
+test('Excel formulas use entered times only and ignore notes and previously saved hour totals',async()=>{
+ const permission={...record('2026-10-05','permission','إذن ساعتين'),check_in:'11:00:00',check_out:'17:00:00',hours:'08:00'};
+ const leave={...record('2026-10-07','leave','Sick Leave'),check_in:'10:00:00',check_out:'17:00:00',hours:'00:00'};
+ const a=await app([permission,leave]);await a.filter('2026-10-05','2026-10-09');a.run('exportToExcel()');const wb=a.exports[0].wb;
+ const detail=wb['Support Team Attendance'];assert.equal(detail[1][3].v,11/24);assert.equal(detail[1][4].v,17/24);assert.equal(detail[1][3].z,'hh:mm');assert.equal(detail[1][5].v,6/24);assert.equal(detail[2][5].v,7/24);assert.equal(detail[2][5].f,'IF(OR(D3="",E3=""),0,MOD(E3-D3,1))');
+ assert(Math.abs(wb.Summary[1][10].v-13/24)<1e-12);assert.equal(wb.Summary[1][10].f,"SUMIF('Support Team Attendance'!$H$2:$H$3,A2,'Support Team Attendance'!$F$2:$F$3)");assert.equal(detail['!cols'][7].hidden,true);
+});
+test('Excel durations preserve minutes, total beyond 24h, overnight shifts and empty times',async()=>{
+ const rs=Array.from({length:22},(_,i)=>({...record(`2026-10-${String(i+1).padStart(2,'0')}`,String(i)),check_out:i===0?'17:30:00':'17:00:00'}));
+ const a=await app(rs);await a.filter('2026-10-01','2026-10-31');a.run('exportToExcel()');const cell=a.exports[0].wb.Summary[1][10];assert(Math.abs(cell.v*24-176.5)<1e-9);assert.equal(cell.z,'[h]:mm');assert.match(cell.f,/\$F\$23/);
+ const overnight={...record('2026-10-28','night'),check_in:'23:00:00',check_out:'01:30:00'};
+ const b=await app([overnight]);b.run('exportToExcel()');assert.equal(b.exports[0].wb['Support Team Attendance'][1][5].v,150/1440);
+ const c=await app([{...record('2026-10-28','empty'),check_in:null,check_out:null,hours:'08:00'}]);c.run('exportToExcel()');assert.equal(c.exports[0].wb['Support Team Attendance'][1][5].v,0);assert.equal(c.exports[0].wb.Summary[1][10].v,0);
+});
+test('Excel groups by employee ID even when names are identical',async()=>{
+ const a=await app([{...record('2026-10-28','first'),check_in:'11:00:00'}, {...record('2026-10-28','second'),employee_id:829,check_out:'10:00:00'}]);
+ a.run("employees.push({id:829,name:'Ahmed',lob:'Justice'});records=records.map(r=>({...r,Name:'Ahmed'}));exportToExcel()");
+ const wb=a.exports[0].wb;assert.equal(wb.Summary[1][10].v,6/24);assert.equal(wb.Summary[2][10].v,1/24);assert.match(wb.Summary[2][10].f,/,A3,/);assert.equal(wb['Support Team Attendance'][1][7],795);assert.equal(wb['Support Team Attendance'][2][7],829);
 });

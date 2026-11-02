@@ -488,13 +488,32 @@
             }
 
             const wb = XLSX.utils.book_new();
+            // Excel stores times as fractions of a day. Calculated cells include
+            // an initial cached value; their formulas recalculate when inputs change.
+            const excelTime = value => {
+                if(!value) return '';
+                const [h,m]=value.split(':').map(Number);
+                return (h*60+m)/1440;
+            };
+            const duration = r => {
+                if(!r.CheckIn || !r.CheckOut) return 0;
+                const [inH,inM]=r.CheckIn.split(':').map(Number);
+                const [outH,outM]=r.CheckOut.split(':').map(Number);
+                return ((outH*60+outM-inH*60-inM+1440)%1440)/1440;
+            };
 
-            // 1. Attendance Sheet
-            const wsData = [["Date", "Day", "Name", "Check In", "Check Out", "Total Working Hours", "Comments"]];
-            exportRecords.forEach(r => {
-                wsData.push([r.Date, r.Day, r.Name, r.CheckIn, r.CheckOut, r.Hours, r.Comments]);
+            // A hidden ID column keeps employees with identical names separate.
+            const wsData = [["Date", "Day", "Name", "Check In", "Check Out", "Total Working Hours", "Comments", "Employee ID"]];
+            exportRecords.forEach((r,i) => {
+                const row=i+2;
+                wsData.push([r.Date,r.Day,r.Name,
+                    r.CheckIn ? {t:'n',v:excelTime(r.CheckIn),z:'hh:mm'} : '',
+                    r.CheckOut ? {t:'n',v:excelTime(r.CheckOut),z:'hh:mm'} : '',
+                    {t:'n',f:`IF(OR(D${row}="",E${row}=""),0,MOD(E${row}-D${row},1))`,v:duration(r),z:'[h]:mm'},
+                    r.Comments,r.EmployeeId]);
             });
             const ws1 = XLSX.utils.aoa_to_sheet(wsData);
+            ws1['!cols']=[{},{},{},{wch:12},{wch:12},{wch:24},{},{hidden:true}];
             XLSX.utils.book_append_sheet(wb, ws1, "Support Team Attendance");
 
             // 2. Summary Sheet
@@ -509,18 +528,24 @@
             ];
             const summaryRows = [summaryHeaders];
 
-            emps.forEach(e => {
+            emps.forEach((e,i) => {
                 const empRecs = exportRecords.filter(r => r.EmployeeId === e.id);
                 const signedIn = empRecs.filter(r => !r.Comments.includes('Leave')).length;
                 const vac = empRecs.filter(r => r.Comments.includes('Annual') || r.Comments.includes('Casual')).length;
                 const sick = empRecs.filter(r => r.Comments.includes('Sick')).length;
 
+                const row=i+2;
+                const lastRow=exportRecords.length+1;
+                const hoursCell={t:'n',
+                    f:`SUMIF('Support Team Attendance'!$H$2:$H$${lastRow},A${row},'Support Team Attendance'!$F$2:$F$${lastRow})`,
+                    v:empRecs.reduce((total,r)=>total+duration(r),0),z:'[h]:mm'};
                 summaryRows.push([
-                    e.id, e.name, e.lob, 21, signedIn, null, vac > 0 ? vac : null, sick > 0 ? sick : null, null, null, "140:00", null, null, null
+                    e.id, e.name, e.lob, 21, signedIn, null, vac > 0 ? vac : null, sick > 0 ? sick : null, null, null, hoursCell, null, null, null
                 ]);
             });
 
             const ws2 = XLSX.utils.aoa_to_sheet(summaryRows);
+            ws2['!cols']=Array.from({length:summaryHeaders.length},(_,i)=>i===10 ? {wch:25} : {});
             XLSX.utils.book_append_sheet(wb, ws2, "Summary");
 
             XLSX.writeFile(wb, `Attendance_Report_${activeRange.from}_to_${activeRange.to}.xlsx`);
