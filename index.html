@@ -146,7 +146,12 @@
         const SUPABASE_KEY = 'sb_publishable_uR0JQkg8skRiUk95xQRpDA_s8gepEG5';
         const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
         const el = id => document.getElementById(id);
-        function status(message) { el('status').textContent = message; }
+        function status(message, isError=false) {
+          el('status').textContent=message;
+          el('status').style.color=isError ? '#b42318' : '#1F4E78';
+          el('status').setAttribute('role',isError ? 'alert' : 'status');
+        }
+        const DUPLICATE_ATTENDANCE_MESSAGE='الشخص مسجل من قبل في هذا اليوم. يمكنك تعديل السجل الموجود أو حذفه.';
         function sortedRecords() {
           return records.slice().sort((a,b)=>a.Date.localeCompare(b.Date) || (a.CreatedAt||'').localeCompare(b.CreatedAt||'') || a.Id.localeCompare(b.Id));
         }
@@ -426,6 +431,10 @@
 
             const payload={employee_id:employee.id,attendance_date:dateVal,check_in:inVal||null,check_out:outVal||null,hours:hrs,comments:commentVal,created_by:currentUser.id};
             const editId=editingId;
+            const existing=records.find(r=>r.EmployeeId===employee.id && r.Date===dateVal);
+            if(!editId && existing && existing.Id!==pendingRecord?.id) {
+              status(DUPLICATE_ATTENDANCE_MESSAGE,true);return;
+            }
             const signature=JSON.stringify(payload);
             if(!editId && (!pendingRecord || pendingRecord.signature!==signature)) pendingRecord={signature,id:crypto.randomUUID()};
             const id=editId ?? pendingRecord.id;
@@ -438,7 +447,17 @@
                 result=await db.from('attendance_records').update({check_in:payload.check_in,check_out:payload.check_out,hours:payload.hours,comments:payload.comments}).eq('id',editId).select().single();
               } else {
                 result=await db.from('attendance_records').insert({id,...payload}).select().single();
-                if(result.error?.code==='23505') result=await db.from('attendance_records').select('*').eq('id',id).single();
+                if(result.error?.code==='23505') {
+                  // The same UUID means an earlier request saved successfully but
+                  // its response was lost. A different record for this day is a duplicate.
+                  const retry=await db.from('attendance_records').select('*').eq('id',id).maybeSingle();
+                  if(retry.error) throw retry.error;
+                  if(!retry.data) {
+                    pendingRecord=null;
+                    status(DUPLICATE_ATTENDANCE_MESSAGE,true);return;
+                  }
+                  result=retry;
+                }
               }
               const {data,error}=result;
               if(error) throw error;

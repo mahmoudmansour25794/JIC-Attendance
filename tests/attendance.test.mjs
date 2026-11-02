@@ -19,22 +19,22 @@ class FixedDate extends Date {constructor(...a){super(...(a.length?a:['2026-10-2
 function record(date,id,comments=''){return {id,employee_id:795,attendance_date:date,created_at:date+'T09:00:00Z',check_in:'09:00:00',check_out:'17:00:00',hours:'08:00',comments,created_by:'u1'}}
 async function app(initialRows,loggedIn=true){
  const nodes={};const el=id=>nodes[id]??=new Element();
- let rows=structuredClone(initialRows),exports=[],queries=[],fail=false,confirmed=true,loginBody;
+ let rows=structuredClone(initialRows),exports=[],queries=[],fail=false,confirmed=true,loginBody,loseInsertResponse=false;
  const session={user:{id:'u1',email:'private@example.invalid'}};
  const db={auth:{onAuthStateChange(){},async getSession(){return {data:{session:loggedIn?session:null},error:null}},async setSession(tokens){assert.equal(tokens.access_token,'access');return {data:{session},error:null}},async signOut(){return {error:null}}},from(table){
   let from,to,id,less,greater,ascending=true,operation='select',payload;
   const q={select(){return q},gte(k,v){from=v;return q},lte(k,v){to=v;return q},lt(k,v){less=v;return q},gt(k,v){greater=v;return q},order(k,options){if(options)ascending=options.ascending;return q},async limit(n){if(fail)return {error:{message:'offline'}};return {data:rows.filter(r=>(!less||r.attendance_date<less)&&(!greater||r.attendance_date>greater)).sort((a,b)=>(ascending?1:-1)*a.attendance_date.localeCompare(b.attendance_date)).slice(0,n),error:null}},eq(k,v){id=v;return q},insert(p){operation='insert';payload=p;return q},update(p){operation='update';payload=p;return q},delete(){operation='delete';return q},
-   async maybeSingle(){return {data:{user_id:'u1',username:'hashem'},error:null}},
+   async maybeSingle(){if(table==='app_users')return {data:{user_id:'u1',username:'hashem'},error:null};return {data:structuredClone(rows.find(r=>r.id===id) || null),error:null}},
    async range(start,end){queries.push({from,to,start,end});if(fail)return {error:{message:'offline'}};return {data:rows.filter(r=>r.attendance_date>=from&&r.attendance_date<=to).sort((a,b)=>a.attendance_date.localeCompare(b.attendance_date)||a.id.localeCompare(b.id)).slice(start,end+1),error:null}},
    then(resolve,reject){return Promise.resolve({data:[{id:795,name:'Ahmed',lob:'Justice'}],error:null}).then(resolve,reject)},
-   async single(){if(fail)return {error:{message:'offline'}};let r=rows.find(r=>r.id===id);if(operation==='insert'){r={...payload,created_at:'2026-10-28T12:00:00Z'};rows.push(r)}if(operation==='update'&&r)Object.assign(r,payload);if(operation==='delete')rows=rows.filter(r=>r.id!==id);return r?{data:structuredClone(r),error:null}:{error:{message:'not found'}}},
+   async single(){if(fail)return {error:{message:'offline'}};let r=rows.find(r=>r.id===id);if(operation==='insert'){if(rows.some(r=>r.id===payload.id || (r.employee_id===payload.employee_id && r.attendance_date===payload.attendance_date)))return {error:{code:'23505',message:'duplicate key'}};r={...payload,created_at:'2026-10-28T12:00:00Z'};rows.push(r);if(loseInsertResponse){loseInsertResponse=false;return {error:{message:'response lost'}}}}if(operation==='update'&&r)Object.assign(r,payload);if(operation==='delete')rows=rows.filter(r=>r.id!==id);return r?{data:structuredClone(r),error:null}:{error:{message:'not found'}}},
   };return q;
  }};
  const c={Date:FixedDate,Intl,console,crypto:webcrypto,setTimeout,window:{supabase:{createClient:()=>db}},document:{getElementById:el,querySelector:()=>el('tbody'),createElement:()=>new Element()},alert:message=>el('alert').textContent=message,confirm:()=>confirmed,fetch:async(url,opts)=>{loginBody=JSON.parse(opts.body);assert(url.endsWith('/username-login'));return {ok:true,json:async()=>({access_token:'access',refresh_token:'refresh'})}},XLSX:{utils:{book_new:()=>({}),aoa_to_sheet:x=>x,book_append_sheet:(wb,s,n)=>wb[n]=s},writeFile:(wb,name)=>exports.push({wb,name})}};
  vm.createContext(c);vm.runInContext(script,c);
  const run=s=>vm.runInContext(s,c); const tick=()=>new Promise(r=>setImmediate(r)); await tick();await tick();
  const filter=async(from,to)=>{el('fromDate').value=from;el('toDate').value=to;await run('applyDateFilter()')};
- return {el,run,filter,exports,queries,rows:()=>rows,fail:v=>fail=v,confirm:v=>confirmed=v,login:()=>loginBody,tick};
+ return {el,run,filter,exports,queries,rows:()=>rows,fail:v=>fail=v,confirm:v=>confirmed=v,login:()=>loginBody,loseInsertResponse:()=>loseInsertResponse=true,tick};
 }
 const sample=()=>[record('2026-10-09','r9'),record('2026-10-05','r5'),record('2026-10-07','r7','Sick Leave'),record('2026-10-28','today'),record('2026-10-04','before'),record('2026-10-10','after')];
 test('opens on Cairo today, loads only today and shows current username',async()=>{
@@ -102,4 +102,28 @@ test('navigation confirms unsaved edits, blocks dirty filters and preserves prio
 });
 test('Today restores home browsing and single-day export after a range',async()=>{
  const a=await app(sample());await a.filter('2026-10-05','2026-10-09');await a.run('openHomeDay(todayDate())');assert.equal(a.run('browseMode'),'home');assert.equal(a.run('selectedDay'),'2026-10-28');a.run('exportToExcel()');assert.equal(a.exports[0].wb['Support Team Attendance'].length,2);
+});
+
+function enterAttendance(a,date='2026-10-28') {
+ a.el('empSelect').value='795';a.el('attDate').value=date;a.el('checkIn').value='09:00';a.el('checkOut').value='17:00';
+}
+test('same employee and day is rejected locally with a clear Arabic error; editing remains available',async()=>{
+ const a=await app(sample());enterAttendance(a);await a.run('addRecord()');assert.equal(a.rows().length,6);assert.match(a.el('status').textContent,/الشخص مسجل من قبل في هذا اليوم/);assert.equal(a.el('status').attributes.role,'alert');
+ a.run("startEdit('today')");a.el('checkIn').value='10:00';await a.run('addRecord()');assert.equal(a.rows().length,6);assert.equal(a.rows().find(r=>r.id==='today').hours,'07:00');
+});
+test('database duplicate outside the viewed day displays the same error without changing existing data',async()=>{
+ const a=await app(sample());enterAttendance(a,'2026-10-05');await a.run('addRecord()');assert.equal(a.rows().length,6);assert.match(a.el('status').textContent,/الشخص مسجل من قبل في هذا اليوم/);assert.equal(a.rows().find(r=>r.id==='r5').check_in,'09:00:00');assert.equal(a.el('addButton').disabled,false);
+});
+test('a concurrent addition from another browser is caught by the database conflict',async()=>{
+ const a=await app([]);a.rows().push(record('2026-10-28','other-browser'));enterAttendance(a);await a.run('addRecord()');assert.equal(a.rows().length,1);assert.match(a.el('status').textContent,/الشخص مسجل من قبل في هذا اليوم/);
+});
+test('employee can be added on another day, and after deleting their existing same-day record',async()=>{
+ const a=await app([record('2026-10-27','yesterday')]);enterAttendance(a);await a.run('addRecord()');assert.equal(a.rows().length,2);
+ const id=a.rows().find(r=>r.attendance_date==='2026-10-28').id;await a.run(`deleteRecord('${id}')`);assert.equal(a.rows().length,1);enterAttendance(a);await a.run('addRecord()');assert.equal(a.rows().length,2);
+});
+test('different employees can have attendance on the same day',async()=>{
+ const other={...record('2026-10-28','other-employee'),employee_id:829};const a=await app([other]);enterAttendance(a);await a.run('addRecord()');assert.equal(a.rows().length,2);assert.equal(a.rows().filter(r=>r.employee_id===795).length,1);
+});
+test('retry after lost insert response recovers the saved UUID without duplication',async()=>{
+ const a=await app([]);enterAttendance(a);a.loseInsertResponse();await a.run('addRecord()');assert.equal(a.rows().length,1);const savedId=a.rows()[0].id;assert.match(a.el('status').textContent,/تعذر تأكيد الحفظ/);await a.run('addRecord()');assert.equal(a.rows().length,1);assert.equal(a.rows()[0].id,savedId);assert.equal(a.run('records.length'),1);assert.match(a.el('status').textContent,/تم حفظ التسجيل/);
 });

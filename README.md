@@ -24,6 +24,12 @@ The login function performs authentication itself, so `verify_jwt = false` is in
 - All pages of the API response are retrieved, including periods exceeding 1,000 records.
 - Inserting a record outside the viewed period saves it but does not add it to that period's table/export.
 
+## Duplicate attendance
+
+An employee can have exactly one attendance record per calendar date. The page shows **الشخص مسجل من قبل في هذا اليوم** on a repeated addition, including conflicts from another browser or a day outside the current filter. Different dates and different employees remain independent. Editing or deleting an existing attendance record is supported; after deletion, the same employee/day can be added again.
+
+`database/attendance_daily_uniqueness.sql` adds the database constraint that enforces this rule even for simultaneous requests. Existing data was checked for duplicates before applying it. Retrying an addition whose success response was lost uses the same request UUID and recovers the saved record instead of inserting a second one.
+
 ## Backend setup
 
 `database/username_login.sql` records the incremental schema applied to the existing attendance project. It assumes the existing employees, app_users, attendance_records tables and RLS policies. It is not a fresh-project bootstrap script and should not be re-run on the configured project.
