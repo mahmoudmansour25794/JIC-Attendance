@@ -147,3 +147,17 @@ test('Excel groups by employee ID even when names are identical',async()=>{
  a.run("employees.push({id:829,name:'Ahmed',lob:'Justice'});records=records.map(r=>({...r,Name:'Ahmed'}));exportToExcel()");
  const wb=a.exports[0].wb;assert.equal(wb.Summary[1][10].v,6/24);assert.equal(wb.Summary[2][10].v,1/24);assert.match(wb.Summary[2][10].f,/,A3,/);assert.equal(wb['Support Team Attendance'][1][7],795);assert.equal(wb['Support Team Attendance'][2][7],829);
 });
+
+test('Excel preserves every original visible column from A in both sheets alongside hours formulas',async()=>{
+ const a=await app([record('2026-10-28','today','إذن ساعتين')]);a.run('exportToExcel()');
+ const wb=a.exports[0].wb, detail=wb['Support Team Attendance'], summary=wb.Summary;
+ assert.deepEqual(Array.from(detail[0].slice(0,7)),['Date','Day','Name','Check In','Check Out','Total Working Hours','Comments']);
+ assert.equal(detail[1][0],'2026-10-28');assert.equal(detail[1][1],'Wednesday');assert.equal(detail[1][2],'Ahmed');assert.equal(detail[1][6],'إذن ساعتين');
+ assert.equal(detail['!cols'].length,8);
+ for(const col of detail['!cols'].slice(0,7)){assert(col.wch>0);assert.equal(col.hidden,false)}
+ assert.equal(detail['!cols'][7].hidden,true);
+ assert.equal(summary[0][0],'ID');assert.equal(summary[0][1],'Name');assert.equal(summary[0][2],'LOB');assert.equal(summary[0][10],'Actual Working Hours');assert.equal(summary[0].length,14);assert.equal(summary[1][0],795);
+ assert.equal(summary['!cols'].length,14);
+ for(const col of summary['!cols']){assert(col.wch>0);assert.equal(col.hidden,false)}
+ assert.equal(detail[1][5].z,'[h]:mm');assert.match(detail[1][5].f,/MOD\(E2-D2,1\)/);assert.match(summary[1][10].f,/SUMIF/);
+});

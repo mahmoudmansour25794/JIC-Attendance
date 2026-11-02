@@ -513,7 +513,10 @@
                     r.Comments,r.EmployeeId]);
             });
             const ws1 = XLSX.utils.aoa_to_sheet(wsData);
-            ws1['!cols']=[{},{},{},{wch:12},{wch:12},{wch:24},{},{hidden:true}];
+            // Empty column metadata can collapse columns in Excel. Give every
+            // original column a visible width; only the helper ID is hidden.
+            ws1['!cols']=[12,14,46,12,12,24,52].map(wch=>({wch,hidden:false}));
+            ws1['!cols'].push({wch:14,hidden:true});
             XLSX.utils.book_append_sheet(wb, ws1, "Support Team Attendance");
 
             // 2. Summary Sheet
@@ -545,7 +548,8 @@
             });
 
             const ws2 = XLSX.utils.aoa_to_sheet(summaryRows);
-            ws2['!cols']=Array.from({length:summaryHeaders.length},(_,i)=>i===10 ? {wch:25} : {});
+            ws2['!cols']=[10,46,34,14,12,28,24,14,18,26,25,42,42,20]
+                .map(wch=>({wch,hidden:false}));
             XLSX.utils.book_append_sheet(wb, ws2, "Summary");
 
             XLSX.writeFile(wb, `Attendance_Report_${activeRange.from}_to_${activeRange.to}.xlsx`);
