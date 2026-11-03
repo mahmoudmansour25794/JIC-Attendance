@@ -78,6 +78,7 @@
                 </select>
             </div>
         </div>
+        <p id="leaveTimeHint" hidden>الإجازة السنوية والعارضة تُحفظ بدون وقت حضور أو انصراف، وبساعات عمل صفر.</p>
         <p id="editNotice" role="status" hidden></p>
         <button id="cancelEditButton" onclick="cancelEdit()" hidden>إلغاء التعديل</button>
         <button id="addButton" onclick="addRecord()">إضافة تسجيل</button>
@@ -152,6 +153,16 @@
           el('status').setAttribute('role',isError ? 'alert' : 'status');
         }
         const DUPLICATE_ATTENDANCE_MESSAGE='الشخص مسجل من قبل في هذا اليوم. يمكنك تعديل السجل الموجود أو حذفه.';
+        function isTimeFreeLeave(value) {
+          return value==='Annual Leave' || value==='Casual Leave';
+        }
+        function syncTimeFields() {
+          const leave=isTimeFreeLeave(el('comments').value);
+          el('checkIn').disabled=busy || leave;
+          el('checkOut').disabled=busy || leave;
+          el('leaveTimeHint').hidden=!leave;
+        }
+        el('comments').addEventListener('change',syncTimeFields);
         function sortedRecords() {
           return records.slice().sort((a,b)=>a.Date.localeCompare(b.Date) || (a.CreatedAt||'').localeCompare(b.CreatedAt||'') || a.Id.localeCompare(b.Id));
         }
@@ -210,6 +221,7 @@
           ['addButton','cancelEditButton','reloadButton','checkIn','checkOut','comments','fromDate','toDate','filterButton','todayButton'].forEach(id=>el(id).disabled=value);
           el('empSelect').disabled=value || !!editingId;
           el('attDate').disabled=value || !!editingId;
+          syncTimeFields();
           renderRecords();
         }
         function startEdit(id) {
@@ -219,11 +231,13 @@
           editingId=id; pendingRecord=null;
           el('empSelect').value=String(rec.EmployeeId); el('attDate').value=rec.Date;
           el('checkIn').value=rec.CheckIn; el('checkOut').value=rec.CheckOut; el('comments').value=rec.Comments;
+          syncTimeFields();
           el('empSelect').disabled=true; el('attDate').disabled=true;
           el('addButton').textContent='حفظ التعديل';
           el('cancelEditButton').hidden=false; el('editNotice').hidden=false;
           el('editNotice').textContent=`تعديل سجل ${rec.Name} — ${rec.Date}`;
-          el('editNotice').scrollIntoView({behavior:'smooth',block:'center'}); el('checkIn').focus();
+          el('editNotice').scrollIntoView({behavior:'smooth',block:'center'});
+          (isTimeFreeLeave(rec.Comments) ? el('comments') : el('checkIn')).focus();
           status('عدّل وقت الحضور أو الانصراف أو الملاحظات، ثم اضغط حفظ التعديل.');
         }
         function cancelEdit(force=false) {
@@ -234,6 +248,7 @@
           el('empSelect').disabled=busy; el('attDate').disabled=busy;
           el('addButton').textContent='إضافة تسجيل';
           el('cancelEditButton').hidden=true; el('editNotice').hidden=true;
+          syncTimeFields();
           if(!force) status('تم إلغاء التعديل دون حفظ.');
         }
         async function deleteRecord(id) {
@@ -429,7 +444,12 @@
                 hrs = `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
             }
 
-            const payload={employee_id:employee.id,attendance_date:dateVal,check_in:inVal||null,check_out:outVal||null,hours:hrs,comments:commentVal,created_by:currentUser.id};
+            const timeFreeLeave=isTimeFreeLeave(commentVal);
+            // Normalize at save time too: disabled inputs may retain draft values.
+            const payload={employee_id:employee.id,attendance_date:dateVal,
+              check_in:timeFreeLeave ? null : inVal||null,
+              check_out:timeFreeLeave ? null : outVal||null,
+              hours:timeFreeLeave ? '00:00' : hrs,comments:commentVal,created_by:currentUser.id};
             const editId=editingId;
             const existing=records.find(r=>r.EmployeeId===employee.id && r.Date===dateVal);
             if(!editId && existing && existing.Id!==pendingRecord?.id) {

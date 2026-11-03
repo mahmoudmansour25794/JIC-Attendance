@@ -27,6 +27,10 @@ The login function performs authentication itself, so `verify_jwt = false` is in
 - All pages of the API response are retrieved, including periods exceeding 1,000 records.
 - Inserting a record outside the viewed period saves it but does not add it to that period's table/export.
 
+## Annual and casual leave
+
+Selecting Annual Leave or Casual Leave disables attendance-time inputs. New records and edits save both times as null and hours as 00:00, even if disabled inputs retain draft values. Their exported times are blank and the Excel duration formula yields zero. Switching to another note type re-enables time inputs. Existing records are normalized when edited; this change does not bulk-modify historical data.
+
 ## Duplicate attendance
 
 An employee can have exactly one attendance record per calendar date. The page shows **الشخص مسجل من قبل في هذا اليوم** on a repeated addition, including conflicts from another browser or a day outside the current filter. Different dates and different employees remain independent. Editing or deleting an existing attendance record is supported; after deletion, the same employee/day can be added again.

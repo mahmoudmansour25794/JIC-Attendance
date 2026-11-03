@@ -161,3 +161,37 @@ test('Excel preserves every original visible column from A in both sheets alongs
  for(const col of summary['!cols']){assert(col.wch>0);assert.equal(col.hidden,false)}
  assert.equal(detail[1][5].z,'[h]:mm');assert.match(detail[1][5].f,/MOD\(E2-D2,1\)/);assert.match(summary[1][10].f,/SUMIF/);
 });
+
+test('annual and casual leave insert null attendance times even when inputs retain values',async()=>{
+ for(const type of ['Annual Leave','Casual Leave']) {
+  const a=await app([]);enterAttendance(a);a.el('comments').value=type;a.el('comments').events.change();
+  assert.equal(a.el('checkIn').disabled,true);assert.equal(a.el('checkOut').disabled,true);assert.equal(a.el('leaveTimeHint').hidden,false);
+  await a.run('addRecord()');assert.equal(a.rows().length,1);
+  const saved=a.rows()[0];assert.equal(saved.comments,type);assert.equal(saved.check_in,null);assert.equal(saved.check_out,null);assert.equal(saved.hours,'00:00');
+  assert.equal(a.el('checkIn').disabled,true);assert.equal(a.el('checkOut').disabled,true);
+  a.run('exportToExcel()');const detail=a.exports[0].wb['Support Team Attendance'];assert.equal(detail[1][3],'');assert.equal(detail[1][4],'');assert.equal(detail[1][5].v,0);assert.equal(a.exports[0].wb.Summary[1][10].v,0);
+ }
+});
+test('changing existing attendance to annual or casual leave clears persisted times',async()=>{
+ for(const type of ['Annual Leave','Casual Leave']) {
+  const a=await app([record('2026-10-28','today')]);a.run("startEdit('today')");a.el('empSelect').value='795';a.el('comments').value=type;a.el('comments').events.change();await a.run('addRecord()');
+  assert.equal(a.rows().length,1);assert.equal(a.rows()[0].id,'today');assert.equal(a.rows()[0].check_in,null);assert.equal(a.rows()[0].check_out,null);assert.equal(a.rows()[0].hours,'00:00');
+ }
+});
+test('time fields follow leave selection, edit cancellation and busy state without changing other note types',async()=>{
+ const a=await app([record('2026-10-28','leave','Annual Leave')]);
+ a.el('comments').value='';a.run("startEdit('leave')");assert.equal(a.el('checkIn').disabled,true);assert.equal(a.el('checkOut').disabled,true);
+ a.run('cancelEdit()');assert.equal(a.el('checkIn').disabled,false);assert.equal(a.el('checkOut').disabled,false);
+ for(const type of ['Annual Leave','Casual Leave']) {
+  a.el('comments').value=type;a.el('comments').events.change();assert.equal(a.el('checkIn').disabled,true);
+ }
+ for(const type of ['', 'Sick Leave','إذن ساعتين','Working Days in Weekends (Remotely)']) {
+  a.el('comments').value=type;a.el('comments').events.change();assert.equal(a.el('checkIn').disabled,false);assert.equal(a.el('checkOut').disabled,false);assert.equal(a.el('leaveTimeHint').hidden,true);
+ }
+ a.run('setBusy(true)');assert.equal(a.el('checkIn').disabled,true);a.run('setBusy(false)');assert.equal(a.el('checkIn').disabled,false);
+});
+test('an annual leave record can be changed back to normal timed attendance',async()=>{
+ const a=await app([{...record('2026-10-28','leave','Annual Leave'),check_in:null,check_out:null,hours:'00:00'}]);
+ a.run("startEdit('leave')");a.el('comments').value='';a.el('comments').events.change();enterAttendance(a);a.el('checkIn').value='11:00';await a.run('addRecord()');
+ assert.equal(a.rows()[0].check_in,'11:00');assert.equal(a.rows()[0].check_out,'17:00');assert.equal(a.rows()[0].hours,'06:00');
+});
